@@ -1,28 +1,14 @@
-﻿# Прогоняет все наборы тестов и возвращает ненулевой код, если хоть один провалился.
-# Ключи передаются тестам как есть: --verbose (печатать каждую проверку), --full (глубокие perft).
-param([Parameter(ValueFromRemainingArguments = $true)] $TestArgs)
+# Прогоняет все наборы тестов через xUnit. Ненулевой код возврата — что-то упало.
+# Ключ -Full добавляет глубокие прогоны perft (переменная среды CHESS_TESTS_FULL).
+param([switch]$Full, [Parameter(ValueFromRemainingArguments = $true)] $TestArgs)
 
-$ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
-$projects = @(
-    'tests\ChessEmulator.CoreTests',
-    'tests\ChessEmulator.EngineTests',
-    'tests\ChessEmulator.UiTests'
-)
+if ($Full) { $env:CHESS_TESTS_FULL = '1' }
 
-$failed = @()
-foreach ($project in $projects) {
-    Write-Host ""
-    Write-Host "=== $project ===" -ForegroundColor Cyan
-    & dotnet run --project (Join-Path $root $project) -c Release -- @TestArgs
-    if ($LASTEXITCODE -ne 0) { $failed += $project }
+try {
+    & dotnet test (Join-Path $root 'ChessEmulator.sln') -c Release @TestArgs
+    exit $LASTEXITCODE
 }
-
-Write-Host ""
-if ($failed.Count -eq 0) {
-    Write-Host "Все наборы тестов пройдены." -ForegroundColor Green
-    exit 0
+finally {
+    if ($Full) { Remove-Item Env:\CHESS_TESTS_FULL -ErrorAction SilentlyContinue }
 }
-
-Write-Host ("Провалены наборы: " + ($failed -join ', ')) -ForegroundColor Red
-exit 1

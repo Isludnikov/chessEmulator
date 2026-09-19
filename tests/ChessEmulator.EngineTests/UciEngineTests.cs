@@ -1,216 +1,222 @@
 using ChessEmulator.Chess;
 using ChessEmulator.Engine;
-using ChessEmulator.TestKit;
+using Xunit;
 
 namespace ChessEmulator.EngineTests;
 
-/// <summary>Обёртка над UCI-движком, проверенная на поддельном движке из tests/FakeUciEngine.</summary>
-internal static class UciEngineTests
+/// <summary>
+/// Обёртка над UCI-движком, проверенная на поддельном движке из tests/FakeUciEngine.
+/// Каждый тест получает свой экземпляр класса, а значит и свежий процесс движка,
+/// поэтому порядок выполнения значения не имеет.
+/// </summary>
+public sealed class UciEngineTests : IAsyncLifetime
 {
-    public static async Task RunAsync(string enginePath)
-    {
-        using var engine = new UciEngine();
-        var sent = new List<string>();
-        var infoCount = 0;
-        engine.LogReceived += (_, text) => { if (text.StartsWith("> ")) lock (sent) sent.Add(text[2..]); };
-        engine.InfoReceived += (_, _) => Interlocked.Increment(ref infoCount);
+    private readonly UciEngine _engine = new();
+    private readonly List<string> _sent = new();
+    private int _infoCount;
 
-        await Handshake(engine, enginePath);
-        Commands(engine, sent);
-        await Analysis(engine, () => infoCount);
-        await ParsingInfo(engine);
-        await StopAndCancel(engine);
-        await Failures(enginePath);
+    /// <summary>
+    /// Поддельный движок кладётся в выходную папку теста ссылкой на проект FakeUciEngine.
+    /// Раньше путь можно было передать первым аргументом командной строки.
+    /// </summary>
+    internal static string EnginePath =>
+        Environment.GetEnvironmentVariable("CHESS_TESTS_ENGINE")
+        ?? Path.Combine(AppContext.BaseDirectory, "FakeUciEngine.exe");
+
+    public async ValueTask InitializeAsync()
+    {
+        _engine.LogReceived += (_, text) => { if (text.StartsWith("> ")) lock (_sent) _sent.Add(text[2..]); };
+        _engine.InfoReceived += (_, _) => Interlocked.Increment(ref _infoCount);
+        await _engine.StartAsync(EnginePath, TestContext.Current.CancellationToken);
     }
 
-    private static async Task Handshake(UciEngine engine, string enginePath)
+    public ValueTask DisposeAsync()
     {
-        await engine.StartAsync(enginePath);
-
-        Test.Suite("UCI: рукопожатие", () =>
-        {
-            Test.True("движок запущен", engine.IsRunning);
-            Test.Check("имя движка", "FakeFish 1.2", engine.Name);
-            Test.Check("автор движка", "Tester", engine.Author);
-            Test.Check("путь сохранён", enginePath, engine.ExecutablePath);
-            Test.Check("разобрано параметров", 8, engine.Options.Count);
-            Test.False("поиск не идёт", engine.IsSearching);
-
-            var threads = engine.FindOption("Threads")!;
-            Test.Check("тип spin", "spin", threads.Type);
-            Test.Check("минимум", "1", threads.Min ?? "");
-            Test.Check("максимум", "512", threads.Max ?? "");
-            Test.Check("значение по умолчанию", "1", threads.Default);
-
-            Test.Check("имя из двух слов", "Skill Level", engine.FindOption("Skill Level")!.Name);
-            Test.True("поиск параметра без учёта регистра", engine.SupportsOption("skill level"));
-            Test.False("несуществующий параметр", engine.SupportsOption("Ultra"));
-            Test.Check("несуществующий параметр не находится", null, engine.FindOption("Ultra"));
-
-            Test.Check("тип check", "check", engine.FindOption("UCI_LimitStrength")!.Type);
-            Test.Check("значение check", "false", engine.FindOption("UCI_LimitStrength")!.Default);
-
-            var style = engine.FindOption("Style")!;
-            Test.Check("тип combo", "combo", style.Type);
-            Test.Check("значение combo по умолчанию", "Normal", style.Default);
-            Test.Check("варианты combo", 2, style.Vars.Count);
-            Test.Check("вариант из двух слов", "Wild Attack", style.Vars[1]);
-
-            Test.Check("тип button", "button", engine.FindOption("Clear Hash")!.Type);
-            Test.Check("параметр с пустым значением", "", engine.FindOption("Debug Log File")!.Default);
-            Test.Check("тип string", "string", engine.FindOption("Debug Log File")!.Type);
-        });
+        _engine.Dispose();
+        return ValueTask.CompletedTask;
     }
 
-    private static void Commands(UciEngine engine, List<string> sent)
+    [Fact(DisplayName = "UCI: рукопожатие")]
+    public void Рукопожатие()
     {
-        Test.Suite("UCI: отправляемые команды", () =>
-        {
-            void Clear() { lock (sent) sent.Clear(); }
-            string Last() { lock (sent) return sent.Count > 0 ? sent[^1] : ""; }
+        Assert.True(_engine.IsRunning, "движок запущен");
+        Assert.Equal("FakeFish 1.2", _engine.Name);  // имя движка
+        Assert.Equal("Tester", _engine.Author);  // автор движка
+        Assert.Equal(EnginePath, _engine.ExecutablePath);  // путь сохранён
+        Assert.Equal(8, _engine.Options.Count);  // разобрано параметров
+        Assert.False(_engine.IsSearching, "поиск не идёт");
 
-            Clear();
-            engine.SetOption("Threads", "4");
-            Test.Check("установка параметра", "setoption name Threads value 4", Last());
+        var threads = _engine.FindOption("Threads")!;
+        Assert.Equal("spin", threads.Type);  // тип spin
+        Assert.Equal("1", threads.Min ?? "");  // минимум
+        Assert.Equal("512", threads.Max ?? "");  // максимум
+        Assert.Equal("1", threads.Default);  // значение по умолчанию
 
-            engine.SetOption("Clear Hash", "");
-            Test.Check("параметр без значения", "setoption name Clear Hash", Last());
+        Assert.Equal("Skill Level", _engine.FindOption("Skill Level")!.Name);  // имя из двух слов
+        Assert.True(_engine.SupportsOption("skill level"), "поиск параметра без учёта регистра");
+        Assert.False(_engine.SupportsOption("Ultra"), "несуществующий параметр");
+        Assert.Null(_engine.FindOption("Ultra"));  // несуществующий параметр не находится
 
-            engine.NewGame();
-            Test.Check("новая партия", "ucinewgame", Last());
+        Assert.Equal("check", _engine.FindOption("UCI_LimitStrength")!.Type);  // тип check
+        Assert.Equal("false", _engine.FindOption("UCI_LimitStrength")!.Default);  // значение check
 
-            engine.SetPosition(Position.StartFen);
-            Test.Check("начальная позиция передаётся коротко", "position startpos", Last());
+        var style = _engine.FindOption("Style")!;
+        Assert.Equal("combo", style.Type);  // тип combo
+        Assert.Equal("Normal", style.Default);  // значение combo по умолчанию
+        Assert.Equal(2, style.Vars.Count);  // варианты combo
+        Assert.Equal("Wild Attack", style.Vars[1]);  // вариант из двух слов
 
-            engine.SetPosition(Position.StartFen, new[] { "e2e4", "e7e5" });
-            Test.Check("начальная позиция с ходами", "position startpos moves e2e4 e7e5", Last());
-
-            const string fen = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
-            engine.SetPosition(fen);
-            Test.Check("произвольная позиция", $"position fen {fen}", Last());
-
-            engine.SetPosition(fen, Array.Empty<string>());
-            Test.Check("пустой список ходов не добавляется", $"position fen {fen}", Last());
-
-            Clear();
-            engine.Send("isready");
-            Test.Check("произвольная команда уходит как есть", "isready", Last());
-        });
+        Assert.Equal("button", _engine.FindOption("Clear Hash")!.Type);  // тип button
+        Assert.Equal("", _engine.FindOption("Debug Log File")!.Default);  // параметр с пустым значением
+        Assert.Equal("string", _engine.FindOption("Debug Log File")!.Type);  // тип string
     }
 
-    private static async Task Analysis(UciEngine engine, Func<int> infoCount)
+    [Fact(DisplayName = "UCI: отправляемые команды")]
+    public void Команды()
     {
-        await engine.IsReadyAsync();
-        var before = infoCount();
-        var result = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByTime(100));
+        void Clear() { lock (_sent) _sent.Clear(); }
+        string Last() { lock (_sent) return _sent.Count > 0 ? _sent[^1] : ""; }
 
-        Test.Suite("UCI: разбор анализа", () =>
-        {
-            Test.Check("лучший ход", "e2e4", result.BestMove);
-            Test.Check("ход для обдумывания", "e7e5", result.Ponder ?? "");
-            Test.Check("строк анализа", 2, result.Lines.Count);
-            Test.Check("служебные строки пропущены", 3, infoCount() - before);
+        Clear();
+        _engine.SetOption("Threads", "4");
+        Assert.Equal("setoption name Threads value 4", Last());  // установка параметра
 
-            var main = result.Lines[1];
-            Test.Check("глубина", 2, main.Depth);
-            Test.Check("выборочная глубина", 3, main.SelDepth);
-            Test.Check("оценка", 31, main.ScoreCp ?? 0);
-            Test.Check("узлы", 200, main.Nodes);
-            Test.Check("скорость", 30000, main.Nps);
-            Test.Check("время", 7, main.TimeMs);
-            Test.Check("главный вариант", "e2e4 e7e5 g1f3", string.Join(" ", main.Pv));
-            Test.True("верхняя граница отмечена", main.UpperBound);
-            Test.False("нижняя граница не отмечена", main.LowerBound);
-            Test.Check("главная строка — первая", main.ScoreCp, result.Best!.ScoreCp);
+        _engine.SetOption("Clear Hash", "");
+        Assert.Equal("setoption name Clear Hash", Last());  // параметр без значения
 
-            var second = result.Lines[2];
-            Test.Check("номер второго варианта", 2, second.MultiPv);
-            Test.Check("мат во второй строке", 5, second.ScoreMate ?? 0);
-            Test.Check("текст оценки второй строки", "#5", second.ScoreText(true));
+        _engine.NewGame();
+        Assert.Equal("ucinewgame", Last());  // новая партия
 
-            Test.False("после поиска движок свободен", engine.IsSearching);
-        });
+        _engine.SetPosition(Position.StartFen);
+        Assert.Equal("position startpos", Last());  // начальная позиция передаётся коротко
+
+        _engine.SetPosition(Position.StartFen, new[] { "e2e4", "e7e5" });
+        Assert.Equal("position startpos moves e2e4 e7e5", Last());  // начальная позиция с ходами
+
+        const string fen = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
+        _engine.SetPosition(fen);
+        Assert.Equal($"position fen {fen}", Last());  // произвольная позиция
+
+        _engine.SetPosition(fen, Array.Empty<string>());
+        Assert.Equal($"position fen {fen}", Last());  // пустой список ходов не добавляется
+
+        Clear();
+        _engine.Send("isready");
+        Assert.Equal("isready", Last());  // произвольная команда уходит как есть
     }
 
-    private static async Task ParsingInfo(UciEngine engine)
+    [Fact(DisplayName = "UCI: разбор анализа")]
+    public async Task Анализ()
     {
-        engine.Send("test-scenario mate");
-        var mate = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(20));
+        await _engine.IsReadyAsync(TestContext.Current.CancellationToken);
+        var before = _infoCount;
+        var result = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByTime(100), TestContext.Current.CancellationToken);
 
-        engine.Send("test-scenario multipv");
-        var multi = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(12));
+        Assert.Equal("e2e4", result.BestMove);  // лучший ход
+        Assert.Equal("e7e5", result.Ponder ?? "");  // ход для обдумывания
+        Assert.Equal(2, result.Lines.Count);  // строк анализа
+        Assert.Equal(3, _infoCount - before);  // служебные строки пропущены
 
-        engine.Send("test-scenario silent");
-        var silent = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(5));
+        var main = result.Lines[1];
+        Assert.Equal(2, main.Depth);  // глубина
+        Assert.Equal(3, main.SelDepth);  // выборочная глубина
+        Assert.Equal(31, main.ScoreCp ?? 0);  // оценка
+        Assert.Equal(200, main.Nodes);  // узлы
+        Assert.Equal(30000, main.Nps);  // скорость
+        Assert.Equal(7, main.TimeMs);  // время
+        Assert.Equal("e2e4 e7e5 g1f3", string.Join(" ", main.Pv));  // главный вариант
+        Assert.True(main.UpperBound, "верхняя граница отмечена");
+        Assert.False(main.LowerBound, "нижняя граница не отмечена");
+        Assert.Equal(main.ScoreCp, result.Best!.ScoreCp);  // главная строка — первая
 
-        engine.Send("test-scenario none");
-        var none = await engine.GoAsync("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", null, SearchLimits.ByDepth(5));
+        var second = result.Lines[2];
+        Assert.Equal(2, second.MultiPv);  // номер второго варианта
+        Assert.Equal(5, second.ScoreMate ?? 0);  // мат во второй строке
+        Assert.Equal("#5", second.ScoreText(true));  // текст оценки второй строки
 
-        engine.Send("test-scenario default");
-
-        Test.Suite("UCI: особые ответы движка", () =>
-        {
-            var info = mate.Best!;
-            Test.Check("мат за соперника", -3, info.ScoreMate ?? 0);
-            Test.Check("текст мата", "#-3", info.ScoreText(true));
-            Test.Check("текст мата с точки зрения чёрных", "#3", info.ScoreText(false));
-            Test.True("нижняя граница разобрана", info.LowerBound);
-            Test.Check("заполнение хеша", 250, info.HashFull);
-            Test.Check("попадания в таблицы", 7, info.TbHits);
-            Test.Check("выборочная глубина", 26, info.SelDepth);
-            Test.Check("ход мата", "d1h5", mate.BestMove);
-            Test.Check("у хода мата нет обдумывания", null, mate.Ponder);
-
-            Test.Check("строки разложены по номерам", 3, multi.Lines.Count);
-            Test.Check("первая строка", 45, multi.Lines[1].ScoreCp ?? 0);
-            Test.Check("вторая строка", 12, multi.Lines[2].ScoreCp ?? 0);
-            Test.Check("третья строка", -15, multi.Lines[3].ScoreCp ?? 0);
-            Test.Check("порядок прихода строк не важен", "e2e4 e7e5", string.Join(" ", multi.Lines[1].Pv));
-
-            Test.Check("без вариантов строк анализа нет", 0, silent.Lines.Count);
-            Test.Check("лучшая строка отсутствует", null, silent.Best);
-            Test.Check("ход всё равно получен", "e2e4", silent.BestMove);
-
-            Test.Check("в законченной позиции хода нет", "(none)", none.BestMove);
-            Test.Check("в законченной позиции анализа нет", 0, none.Lines.Count);
-        });
+        Assert.False(_engine.IsSearching, "после поиска движок свободен");
     }
 
-    private static async Task StopAndCancel(UciEngine engine)
+    [Fact(DisplayName = "UCI: особые ответы движка")]
+    public async Task ОсобыеОтветы()
     {
-        var infinite = engine.GoAsync(Position.StartFen, new[] { "e2e4" }, SearchLimits.AsInfinite());
-        await Task.Delay(300);
-        var searching = engine.IsSearching;
-        await engine.StopSearchAsync();
+        _engine.Send("test-scenario mate");
+        var mate = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(20), TestContext.Current.CancellationToken);
+
+        _engine.Send("test-scenario multipv");
+        var multi = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(12), TestContext.Current.CancellationToken);
+
+        _engine.Send("test-scenario silent");
+        var silent = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(5), TestContext.Current.CancellationToken);
+
+        _engine.Send("test-scenario none");
+        var none = await _engine.GoAsync("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", null, SearchLimits.ByDepth(5), TestContext.Current.CancellationToken);
+
+        _engine.Send("test-scenario default");
+
+        var info = mate.Best!;
+        Assert.Equal(-3, info.ScoreMate ?? 0);  // мат за соперника
+        Assert.Equal("#-3", info.ScoreText(true));  // текст мата
+        Assert.Equal("#3", info.ScoreText(false));  // текст мата с точки зрения чёрных
+        Assert.True(info.LowerBound, "нижняя граница разобрана");
+        Assert.Equal(250, info.HashFull);  // заполнение хеша
+        Assert.Equal(7, info.TbHits);  // попадания в таблицы
+        Assert.Equal(26, info.SelDepth);  // выборочная глубина
+        Assert.Equal("d1h5", mate.BestMove);  // ход мата
+        Assert.Null(mate.Ponder);  // у хода мата нет обдумывания
+
+        Assert.Equal(3, multi.Lines.Count);  // строки разложены по номерам
+        Assert.Equal(45, multi.Lines[1].ScoreCp ?? 0);  // первая строка
+        Assert.Equal(12, multi.Lines[2].ScoreCp ?? 0);  // вторая строка
+        Assert.Equal(-15, multi.Lines[3].ScoreCp ?? 0);  // третья строка
+        Assert.Equal("e2e4 e7e5", string.Join(" ", multi.Lines[1].Pv));  // порядок прихода строк не важен
+
+        Assert.Empty(silent.Lines);  // без вариантов строк анализа нет
+        Assert.Null(silent.Best);  // лучшая строка отсутствует
+        Assert.Equal("e2e4", silent.BestMove);  // ход всё равно получен
+
+        Assert.Equal("(none)", none.BestMove);  // в законченной позиции хода нет
+        Assert.Empty(none.Lines);  // в законченной позиции анализа нет
+    }
+
+    [Fact(DisplayName = "UCI: остановка поиска")]
+    public async Task Остановка()
+    {
+        var infinite = _engine.GoAsync(Position.StartFen, new[] { "e2e4" }, SearchLimits.AsInfinite(), TestContext.Current.CancellationToken);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
+        var searching = _engine.IsSearching;
+        await _engine.StopSearchAsync();
         var stopped = await infinite;
 
-        var again = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3));
+        var again = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3), TestContext.Current.CancellationToken);
 
         using var cts = new CancellationTokenSource(250);
-        var cancelled = await engine.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(), cts.Token);
+        var cancelled = await _engine.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(), cts.Token);
 
-        await engine.StopSearchAsync();   // останавливать нечего
+        await _engine.StopSearchAsync();   // останавливать нечего
 
-        Test.Suite("UCI: остановка поиска", () =>
-        {
-            Test.True("бесконечный поиск идёт", searching);
-            Test.Check("остановка возвращает ход", "e2e4", stopped.BestMove);
-            Test.False("после остановки поиск завершён", engine.IsSearching);
-            Test.True("анализ успел прийти", stopped.Lines.Count > 0);
-            Test.Check("поиск запускается снова", "e2e4", again.BestMove);
-            Test.Check("отмена по токену возвращает ход", "e2e4", cancelled.BestMove);
-            Test.NoThrow("повторная остановка безопасна", () => engine.StopSearchAsync().Wait());
-        });
+        Assert.True(searching, "бесконечный поиск идёт");
+        Assert.Equal("e2e4", stopped.BestMove);  // остановка возвращает ход
+        Assert.False(_engine.IsSearching, "после остановки поиск завершён");
+        Assert.True(stopped.Lines.Count > 0, "анализ успел прийти");
+        Assert.Equal("e2e4", again.BestMove);  // поиск запускается снова
+        Assert.Equal("e2e4", cancelled.BestMove);  // отмена по токену возвращает ход
+        Assert.Null(Record.Exception(() => _engine.StopSearchAsync().Wait(TestContext.Current.CancellationToken)));  // повторная остановка безопасна
     }
+}
 
-    private static async Task Failures(string enginePath)
+/// <summary>Поведение обёртки, когда движок падает или его вовсе нет.</summary>
+public class UciEngineFailureTests
+{
+    [Fact(DisplayName = "UCI: ошибки")]
+    public async Task Ошибки()
     {
         // Движок падает посреди поиска
         using var crashing = new UciEngine();
-        await crashing.StartAsync(enginePath);
+        await crashing.StartAsync(UciEngineTests.EnginePath, TestContext.Current.CancellationToken);
         crashing.Send("test-scenario default");
-        var search = crashing.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite());
-        await Task.Delay(200);
+        var search = crashing.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(), TestContext.Current.CancellationToken);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
         crashing.Send("test-crash");
 
         Exception? crashError = null;
@@ -224,13 +230,13 @@ internal static class UciEngineTests
         }
 
         // Ожидание завершения процесса, чтобы IsRunning успел обновиться
-        for (var i = 0; i < 50 && crashing.IsRunning; i++) await Task.Delay(20);
+        for (var i = 0; i < 50 && crashing.IsRunning; i++) await Task.Delay(20, TestContext.Current.CancellationToken);
 
         var missing = new UciEngine();
         Exception? startError = null;
         try
         {
-            await missing.StartAsync(Path.Combine(AppContext.BaseDirectory, "нет-такого-движка.exe"));
+            await missing.StartAsync(Path.Combine(AppContext.BaseDirectory, "нет-такого-движка.exe"), TestContext.Current.CancellationToken);
         }
         catch (Exception ex)
         {
@@ -240,28 +246,25 @@ internal static class UciEngineTests
         Exception? goError = null;
         try
         {
-            await missing.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(1));
+            await missing.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(1), TestContext.Current.CancellationToken);
         }
         catch (Exception ex)
         {
             goError = ex;
         }
 
-        Test.Suite("UCI: ошибки", () =>
-        {
-            Test.Check("падение движка прерывает поиск", "InvalidOperationException",
-                crashError?.GetType().Name ?? "нет исключения");
-            Test.False("после падения движок не запущен", crashing.IsRunning);
-            Test.NoThrow("остановка упавшего движка безопасна", () => crashing.Stop());
-            Test.NoThrow("повторная остановка безопасна", () => crashing.Stop());
+        // падение движка прерывает поиск
+        Assert.Equal("InvalidOperationException", crashError?.GetType().Name ?? "нет исключения");
+        Assert.False(crashing.IsRunning, "после падения движок не запущен");
+        Assert.Null(Record.Exception(() => crashing.Stop()));  // остановка упавшего движка безопасна
+        Assert.Null(Record.Exception(() => crashing.Stop()));  // повторная остановка безопасна
 
-            Test.Check("отсутствующий файл", "FileNotFoundException",
-                startError?.GetType().Name ?? "нет исключения");
-            Test.Check("поиск без движка", "InvalidOperationException",
-                goError?.GetType().Name ?? "нет исключения");
-            Test.False("незапущенный движок не работает", missing.IsRunning);
-            Test.NoThrow("освобождение ресурсов", () => missing.Dispose());
-            Test.NoThrow("повторное освобождение", () => missing.Dispose());
-        });
+        // отсутствующий файл
+        Assert.Equal("FileNotFoundException", startError?.GetType().Name ?? "нет исключения");
+        // поиск без движка
+        Assert.Equal("InvalidOperationException", goError?.GetType().Name ?? "нет исключения");
+        Assert.False(missing.IsRunning, "незапущенный движок не работает");
+        Assert.Null(Record.Exception(() => missing.Dispose()));  // освобождение ресурсов
+        Assert.Null(Record.Exception(() => missing.Dispose()));  // повторное освобождение
     }
 }

@@ -1,6 +1,5 @@
-using System.Diagnostics;
 using ChessEmulator.Chess;
-using ChessEmulator.TestKit;
+using Xunit;
 
 namespace ChessEmulator.CoreTests;
 
@@ -10,9 +9,9 @@ namespace ChessEmulator.CoreTests;
 /// и сверены с ответами Stockfish на команду «go perft».
 /// Любая ошибка в генерации ходов, рокировках, взятии на проходе или превращении ломает счёт.
 /// </summary>
-internal static class PerftTests
+public class PerftTests
 {
-    private sealed record Case(string Name, string Fen, int Depth, long Nodes, bool Slow = false);
+    public sealed record Case(string Name, string Fen, int Depth, long Nodes, bool Slow = false);
 
     private static readonly Case[] Cases =
     {
@@ -88,29 +87,34 @@ internal static class PerftTests
         return total;
     }
 
-    public static void Run()
-    {
-        var clock = Stopwatch.StartNew();
-        long nodes = 0;
-        var skipped = 0;
+    /// <summary>
+    /// Глубокие прогоны включаются переменной среды CHESS_TESTS_FULL
+    /// (раньше это был ключ командной строки --full).
+    /// </summary>
+    public static bool RunSlow =>
+        Environment.GetEnvironmentVariable("CHESS_TESTS_FULL") is "1" or "true";
 
-        Test.Suite("Правила: perft", () =>
-        {
-            foreach (var c in Cases)
-            {
-                if (c.Slow && !Test.Full)
-                {
-                    skipped++;
-                    continue;
-                }
-                var actual = Perft(Position.FromFen(c.Fen), c.Depth);
-                nodes += actual;
-                Test.Check(c.Name, c.Nodes, actual);
-            }
-        });
+    public static IEnumerable<TheoryDataRow<string, int, long>> FastCases => Rows(slow: false);
 
-        var seconds = Math.Max(0.001, clock.Elapsed.TotalSeconds);
-        Console.WriteLine($"        {nodes:N0} узлов за {seconds:0.0} с ({nodes / seconds / 1000:N0} тыс. узлов/с)" +
-                          (skipped > 0 ? $"; пропущено глубоких прогонов: {skipped} (см. --full)" : string.Empty));
-    }
+    public static IEnumerable<TheoryDataRow<string, int, long>> SlowCases => Rows(slow: true);
+
+    /// <summary>Имя случая идёт в заголовок теста, а не в неиспользуемый параметр.</summary>
+    private static IEnumerable<TheoryDataRow<string, int, long>> Rows(bool slow) =>
+        Cases.Where(c => c.Slow == slow)
+             .Select(c => new TheoryDataRow<string, int, long>(c.Fen, c.Depth, c.Nodes)
+             {
+                 TestDisplayName = c.Name
+             });
+
+    [Theory(DisplayName = "Правила: perft")]
+    [MemberData(nameof(FastCases))]
+    public void Быстрые(string fen, int depth, long nodes) =>
+        Assert.Equal(nodes, Perft(Position.FromFen(fen), depth));
+
+    [Theory(DisplayName = "Правила: perft (глубокий прогон)",
+            Skip = "Задайте CHESS_TESTS_FULL=1, чтобы прогнать глубокие perft.",
+            SkipUnless = nameof(RunSlow))]
+    [MemberData(nameof(SlowCases))]
+    public void Глубокие(string fen, int depth, long nodes) =>
+        Assert.Equal(nodes, Perft(Position.FromFen(fen), depth));
 }

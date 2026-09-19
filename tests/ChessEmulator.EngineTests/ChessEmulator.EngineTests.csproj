@@ -11,10 +11,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ChessEmulator\ChessEmulator.csproj" />
     <!-- Поддельный движок попадает в выходную папку теста и запускается как настоящий. -->
     <ProjectReference Include="..\FakeUciEngine\FakeUciEngine.csproj" />
-    <ProjectReference Include="..\TestKit\TestKit.csproj" />
   </ItemGroup>
 
 </Project>

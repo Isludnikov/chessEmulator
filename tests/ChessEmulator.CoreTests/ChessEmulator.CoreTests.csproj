@@ -11,8 +11,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="4.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ChessEmulator\ChessEmulator.csproj" />
-    <ProjectReference Include="..\TestKit\TestKit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- PgnTests ищет samples\opera-game.pgn от папки сборки; кладём файл рядом. -->
+    <None Include="..\..\samples\opera-game.pgn"
+          Link="samples\opera-game.pgn"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

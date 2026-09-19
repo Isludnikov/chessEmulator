@@ -83,21 +83,27 @@ tests/ChessEmulator.CoreTests/    правила, нотация, дерево �
 tests/ChessEmulator.EngineTests/  обёртка UCI, типы движка, настройки, поиск движка
 tests/ChessEmulator.UiTests/      доска, редактор позиции, запись партии, шкала оценки, отрисовка фигур
 tests/FakeUciEngine/              поддельный движок для тестов обёртки
-tests/TestKit/                    общий движок проверок: разделы, счёт, итог
 samples/                          пример партии в PGN
 ```
 
 ## Тесты
 
+Тесты написаны на xUnit (пакет `xunit.v3` 4.0.1) и запускаются обычным `dotnet test`:
+
 ```bash
-powershell -ExecutionPolicy Bypass -File tests/run-all.ps1
+dotnet test
 ```
 
-Скрипт прогоняет три набора подряд и возвращает ненулевой код, если хоть один провалился.
+Есть и скрипт-обёртка — он делает то же самое плюс включает глубокие прогоны по ключу `-Full`:
+
+```bash
+powershell -ExecutionPolicy Bypass -File tests/run-all.ps1 -Full
+```
+
 Наборы можно запускать и по отдельности:
 
 ```bash
-dotnet run --project tests/ChessEmulator.CoreTests
+dotnet test tests/ChessEmulator.CoreTests
 ```
 
 Правила игры и запись партии: perft на 42 позициях (31 млн узлов, значения сверены с ответами
@@ -112,7 +118,7 @@ Stockfish на `go perft`) — от классических Kiwipete и «по�
 и строитель позиции с автокоррекцией и проверкой.
 
 ```bash
-dotnet run --project tests/ChessEmulator.EngineTests
+dotnet test tests/ChessEmulator.EngineTests
 ```
 
 Движок и настройки: рукопожатие `uci`/`isready`, разбор всех типов параметров (spin, check,
@@ -123,7 +129,7 @@ combo с пробелами, button, string без значения), строк
 ограничения поиска, хранение настроек в JSON и поиск исполняемого файла движка.
 
 ```bash
-dotnet run --project tests/ChessEmulator.UiTests
+dotnet test tests/ChessEmulator.UiTests
 ```
 
 Интерфейс без показа окон: контролы рисуются в картинку, а мышь подаётся синтетически.
@@ -135,8 +141,13 @@ dotnet run --project tests/ChessEmulator.UiTests
 (раскладка, варианты, оценки, выбор хода мышью), шкала оценки и отрисовка всех двенадцати фигур —
 проверка, что фигура видна в клетке и не вылезает за её края.
 
-Ключи для любого набора: `--verbose` печатает каждую проверку, `--full` добавляет глубокие
-прогоны perft (на них уходит несколько секунд).
+Глубокие прогоны perft (на них уходит несколько секунд) по умолчанию пропускаются и видны
+в отчёте как skipped. Включаются переменной среды `CHESS_TESTS_FULL=1` либо ключом `-Full`
+у `run-all.ps1`. Прежний ключ `--verbose` не нужен: каждый раздел проверок теперь отдельный тест,
+а подробный вывод даёт `dotnet test -- --output Detailed`.
+
+Поддельный движок для набора EngineTests собирается из `tests/FakeUciEngine` и попадает в папку
+сборки теста; путь можно переопределить переменной среды `CHESS_TESTS_ENGINE`.
 
 Не покрыто автотестами главное окно (`MainForm`): его поведение завязано на живой движок,
 диалоги и буфер обмена — это проверяется вручную.
