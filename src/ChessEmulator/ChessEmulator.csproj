@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ChessEmulator</RootNamespace>
+    <AssemblyName>ChessEmulator</AssemblyName>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationVisualStyles>true</ApplicationVisualStyles>
+    <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
+    <Version>1.0.0</Version>
+    <Product>Chess Emulator</Product>
+    <Company>ChessEmulator</Company>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Палитра фигур и прочие внутренние классы интерфейса проверяются тестами. -->
+    <InternalsVisibleTo Include="ChessEmulator.UiTests" />
+  </ItemGroup>
+
+</Project>
