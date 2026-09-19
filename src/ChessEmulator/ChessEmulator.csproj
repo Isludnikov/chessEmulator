@@ -20,6 +20,8 @@
   <ItemGroup>
     <!-- Палитра фигур и прочие внутренние классы интерфейса проверяются тестами. -->
     <InternalsVisibleTo Include="ChessEmulator.UiTests" />
+    <!-- Сырые команды UCI (Send/SetOption/SetPosition) закрыты от интерфейса, но нужны тестам. -->
+    <InternalsVisibleTo Include="ChessEmulator.EngineTests" />
   </ItemGroup>
 
 </Project>

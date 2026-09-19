@@ -270,4 +270,99 @@ public class BoardControlTests
             using var image = UiHarness.Render(tiny);
         }));
     }
+
+    [WinFormsFact(DisplayName = "Доска: плашка с результатом")]
+    public void ResultBanner()
+    {
+        var boardRect = new Rectangle(Origin.X, Origin.Y, Square * 8, Square * 8);
+        var band = new Rectangle(Origin.X, Origin.Y + Square * 3, Square * 8, Square * 2);
+        var style = new BoardBannerStyle(Color.FromArgb(26, 26, 28), Color.Gainsboro, Color.FromArgb(190, 190, 196));
+
+        using var board = NewBoard(Position.StartFen);
+        Assert.False(board.HasResultBanner);
+        using var plain = UiHarness.Render(board);
+
+        board.ShowResultBanner("МАТ · ПОБЕДА ЧЁРНЫХ", "0–1", style);
+        Assert.True(board.HasResultBanner, "плашка показана");
+        using var withBanner = UiHarness.Render(board);
+        Assert.True(UiHarness.Difference(plain, withBanner, band) > 5000, "плашка закрывает середину доски");
+
+        // Всё нарисованное осталось внутри доски
+        Assert.Equal(UiHarness.Difference(plain, withBanner), UiHarness.Difference(plain, withBanner, boardRect));
+
+        // Доска лишь притенена, а не закрашена: светлая клетка осталась светлее тёмной
+        var light = withBanner.GetPixel(Center(Sq.Parse("b3"), false).X, Center(Sq.Parse("b3"), false).Y);
+        var dark = withBanner.GetPixel(Center(Sq.Parse("a3"), false).X, Center(Sq.Parse("a3"), false).Y);
+        Assert.True(light.R > dark.R, "клетки под плашкой ещё различимы");
+
+        // Повторный показ того же результата ничего не меняет
+        board.ShowResultBanner("МАТ · ПОБЕДА ЧЁРНЫХ", "0–1", style);
+        using var again = UiHarness.Render(board);
+        Assert.Equal(0, UiHarness.Difference(withBanner, again));
+
+        // Другой результат выглядит иначе
+        board.ShowResultBanner("НИЧЬЯ · ПАТ", "½–½", new BoardBannerStyle(
+            Color.FromArgb(34, 34, 38), Color.Gainsboro, Color.FromArgb(220, 180, 90)));
+        using var draw = UiHarness.Render(board);
+        Assert.True(UiHarness.Difference(withBanner, draw) > 1000, "у ничьей своя плашка");
+
+        board.ClearResultBanner();
+        Assert.False(board.HasResultBanner);
+        using var cleared = UiHarness.Render(board);
+        Assert.Equal(0, UiHarness.Difference(plain, cleared));  // после снятия плашки картинка прежняя
+
+        // Длинный заголовок ужимается и тоже остаётся внутри доски
+        board.ShowResultBanner("НИЧЬЯ · НЕДОСТАТОЧНО МАТЕРИАЛА", "½–½", style);
+        using var longHeadline = UiHarness.Render(board);
+        Assert.Equal(UiHarness.Difference(plain, longHeadline), UiHarness.Difference(plain, longHeadline, boardRect));
+
+        // Крошечная доска с плашкой рисуется без ошибок
+        Assert.Null(Record.Exception(() =>
+        {
+            using var tiny = new BoardControl { ClientSize = new Size(64, 64) };
+            tiny.ShowResultBanner("НИЧЬЯ · ТРОЕКРАТНОЕ ПОВТОРЕНИЕ", "½–½", style);
+            using var image = UiHarness.Render(tiny);
+            Assert.True(new Rectangle(0, 0, 64, 64).Contains(UiHarness.InkBounds(image, tiny.BackColor)),
+                "плашка не вылезает за контрол");
+        }));
+    }
+
+    [WinFormsFact(DisplayName = "Доска: плашка гаснет от щелчка")]
+    public void ResultBannerDismiss()
+    {
+        var style = new BoardBannerStyle(Color.FromArgb(26, 26, 28), Color.Gainsboro, Color.FromArgb(190, 190, 196));
+
+        using var board = NewBoard(Position.StartFen);
+        var dismissed = 0;
+        board.ResultBannerDismissed += (_, _) => dismissed++;
+        var moves = new List<Chess.Move>();
+        board.MoveMade += (_, e) => moves.Add(e.Move);
+
+        using var plain = UiHarness.Render(board);
+        board.ShowResultBanner("МАТ · ПОБЕДА БЕЛЫХ", "1–0", style);
+
+        // Щелчок по пустой клетке только гасит плашку — доска возвращается в прежний вид
+        UiHarness.Click(board, Center(Sq.Parse("e5"), false));
+        Assert.Equal(1, dismissed);
+        Assert.False(board.HasResultBanner, "щелчок убирает плашку");
+        using var cleared = UiHarness.Render(board);
+        Assert.Equal(0, UiHarness.Difference(plain, cleared));
+
+        UiHarness.Click(board, Center(Sq.Parse("e5"), false));
+        Assert.Equal(1, dismissed);  // погашенная плашка больше о себе не сообщает
+
+        // Щелчок не съеден: он же выбирает фигуру, и ход доходит до владельца
+        board.ShowResultBanner("МАТ · ПОБЕДА БЕЛЫХ", "1–0", style);
+        UiHarness.Click(board, Center(Sq.Parse("e2"), false));
+        Assert.Equal(2, dismissed);
+        UiHarness.Click(board, Center(Sq.Parse("e4"), false));
+        Assert.Single(moves);
+        Assert.Equal("e2e4", moves[0].ToUci());
+
+        // Редактор гасит плашку молча
+        board.ShowResultBanner("МАТ · ПОБЕДА БЕЛЫХ", "1–0", style);
+        board.Mode = BoardMode.Edit;
+        Assert.False(board.HasResultBanner, "в редакторе плашки нет");
+        Assert.Equal(2, dismissed);
+    }
 }

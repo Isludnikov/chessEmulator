@@ -1,9 +1,15 @@
 // Минимальный поддельный UCI-движок для проверки обёртки UciEngine.
-// Команды читаются всегда, поиск идёт в отдельном потоке — как у настоящего движка.
 //
 // Кроме UCI понимает служебные команды тестов:
 //   test-scenario <имя>  — что отвечать на следующую команду go
 //                          (default, mate, none, multipv, silent)
+//   test-mode <имя>      — как вести себя циклу чтения команд:
+//                          lenient (по умолчанию) — команды читаются всегда, новый go отменяет
+//                              предыдущий поиск;
+//                          strict — как настоящий Stockfish: всё, кроме stop/quit/ponderhit,
+//                              сначала дожидается конца поиска, поэтому команда, посланная во
+//                              время поиска, вешает движок намертво;
+//                          wedge — после go движок молчит: ни bestmove, ни реакции на stop.
 //   test-crash           — немедленно завершить процесс, как упавший движок
 using System;
 using System.Threading;
@@ -13,6 +19,8 @@ object outLock = new();
 CancellationTokenSource? searchCts = null;
 Task? searchTask = null;
 var scenario = "default";
+var strict = false;
+var wedge = false;
 
 void Say(string text)
 {
@@ -53,6 +61,13 @@ void Search(bool infinite, CancellationToken token)
             break;
     }
 
+    if (wedge)
+    {
+        // Зависший движок: поиск не кончается и не реагирует на отмену.
+        Thread.Sleep(Timeout.Infinite);
+        return;
+    }
+
     if (infinite) token.WaitHandle.WaitOne(TimeSpan.FromSeconds(30));
     else Thread.Sleep(50);
 
@@ -65,9 +80,33 @@ void Search(bool infinite, CancellationToken token)
     });
 }
 
+// Настоящий Stockfish обрабатывает всё, кроме stop/quit/ponderhit, только после конца поиска —
+// команда прочитана, а поток ввода замер, и следующий stop уже никто не увидит.
+void WaitForSearchFinished()
+{
+    if (!strict) return;
+    try { searchTask?.Wait(); } catch { /* поиск отменён */ }
+}
+
 string? line;
 while ((line = Console.ReadLine()) != null)
 {
+    if (line == "stop")
+    {
+        searchCts?.Cancel();
+        continue;
+    }
+
+    if (line == "quit")
+    {
+        searchCts?.Cancel();
+        break;
+    }
+
+    if (line == "ponderhit") continue;
+
+    WaitForSearchFinished();
+
     if (line == "uci")
     {
         Say("id name FakeFish 1.2");
@@ -91,6 +130,13 @@ while ((line = Console.ReadLine()) != null)
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         scenario = parts.Length > 1 ? parts[1] : "default";
     }
+    else if (line.StartsWith("test-mode"))
+    {
+        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var name = parts.Length > 1 ? parts[1] : "lenient";
+        strict = name == "strict";
+        wedge = name == "wedge";
+    }
     else if (line == "test-crash")
     {
         Environment.Exit(3);
@@ -98,19 +144,13 @@ while ((line = Console.ReadLine()) != null)
     else if (line.StartsWith("go"))
     {
         var infinite = line.Contains("infinite");
-        searchCts?.Cancel();
-        searchTask?.Wait();
+        if (!strict)
+        {
+            searchCts?.Cancel();
+            searchTask?.Wait();
+        }
         searchCts = new CancellationTokenSource();
         var token = searchCts.Token;
         searchTask = Task.Run(() => Search(infinite, token));
-    }
-    else if (line == "stop")
-    {
-        searchCts?.Cancel();
-    }
-    else if (line == "quit")
-    {
-        searchCts?.Cancel();
-        break;
     }
 }

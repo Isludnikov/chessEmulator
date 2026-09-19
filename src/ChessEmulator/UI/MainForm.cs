@@ -26,6 +26,8 @@ public sealed class MainForm : Form
     private readonly TextBox _fenBox = new();
     private readonly TextBox _commentBox = new();
     private readonly ComboBox _playModeBox = new();
+    private readonly Button _hintButton = new();
+    private readonly Button _playBestButton = new();
 
     private readonly StatusStrip _statusStrip = new();
     private readonly ToolStripStatusLabel _engineStatus = new();
@@ -48,11 +50,18 @@ public sealed class MainForm : Form
     private bool _editing;
     private int _savedSplitterDistance;
 
+    /// <summary>Узел, на котором плашку с результатом закрыли вручную: туда её не возвращаем.</summary>
+    private MoveNode? _bannerDismissedFor;
+
     private readonly Dictionary<int, EngineInfo> _lines = new();
     private int _analysisGeneration;
     private bool _engineBusyWithMove;
     private CancellationTokenSource? _gameAnalysisCts;
     private bool _suppressCommentEvents;
+    private readonly UciLog _uciLog = new();
+    private UciLogForm? _uciLogForm;
+    private bool _restartingEngine;
+    private DateTime _lastEngineRestartUtc = DateTime.MinValue;
 
     public MainForm(string? pgnPath = null)
     {
@@ -70,7 +79,11 @@ public sealed class MainForm : Form
         BuildUi();
         WireEvents();
 
-        if (!string.IsNullOrEmpty(pgnPath)) LoadPgnFile(pgnPath);
+        if (!string.IsNullOrEmpty(pgnPath) && ReadPgnFile(pgnPath) is { } startupGame)
+        {
+            _game = startupGame;
+            _moveList.Game = _game;
+        }
         RefreshAll();
 
         Shown += async (_, _) => await AutoStartEngineAsync();
@@ -200,16 +213,17 @@ public sealed class MainForm : Form
         });
         _playModeBox.SelectedIndex = 0;
 
-        var hintButton = new Button { Text = "Подсказка", AutoSize = true, Margin = new Padding(10, 2, 0, 0) };
-        hintButton.Click += async (_, _) => await PlayEngineMoveAsync(applyToBoard: false);
+        StyleEngineButton(_hintButton, "Подсказка", "Показать лучший ход, не делая его", new Padding(10, 2, 0, 0));
+        _hintButton.Click += async (_, _) => await PlayEngineMoveAsync(applyToBoard: false);
 
-        var playBestButton = new Button { Text = "Сыграть лучший", AutoSize = true, Margin = new Padding(6, 2, 0, 0) };
-        playBestButton.Click += async (_, _) => await PlayEngineMoveAsync(applyToBoard: true);
+        StyleEngineButton(_playBestButton, "Сыграть лучший", "Сделать ход, который советует движок",
+            new Padding(6, 2, 0, 0));
+        _playBestButton.Click += async (_, _) => await PlayEngineMoveAsync(applyToBoard: true);
 
         header.Controls.Add(modeLabel);
         header.Controls.Add(_playModeBox);
-        header.Controls.Add(hintButton);
-        header.Controls.Add(playBestButton);
+        header.Controls.Add(_hintButton);
+        header.Controls.Add(_playBestButton);
 
         _linesView.Dock = DockStyle.Fill;
         _linesView.View = View.Details;
@@ -236,6 +250,20 @@ public sealed class MainForm : Form
         panel.Controls.Add(_linesView, 0, 1);
         panel.Controls.Add(_adviceBox, 0, 2);
         return panel;
+    }
+
+    private static void StyleEngineButton(Button button, string text, string tooltip, Padding margin)
+    {
+        button.Text = text;
+        button.AutoSize = true;
+        button.Height = 26;
+        button.Margin = margin;
+        button.FlatStyle = FlatStyle.Flat;
+        button.ForeColor = Color.Gainsboro;
+        button.BackColor = Color.FromArgb(52, 52, 56);
+        button.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 76);
+        var tip = new ToolTip();
+        tip.SetToolTip(button, tooltip);
     }
 
     private Control BuildGamePanel()
@@ -289,7 +317,7 @@ public sealed class MainForm : Form
             e.SuppressKeyPress = true;
             // В режиме редактора FEN правит расстановку, а не начинает новую партию.
             if (_editing) _editorPanel.SetFen(_fenBox.Text);
-            else LoadFen(_fenBox.Text);
+            else _ = LoadFenAsync(_fenBox.Text);
         };
 
         panel.Controls.Add(_moveList, 0, 0);
@@ -329,14 +357,14 @@ public sealed class MainForm : Form
         };
 
         var file = new ToolStripMenuItem("Партия");
-        file.DropDownItems.Add(new ToolStripMenuItem("Новая партия", null, (_, _) => NewGame()) { ShortcutKeys = Keys.Control | Keys.N });
-        file.DropDownItems.Add(new ToolStripMenuItem("Новая партия из позиции (FEN)…", null, (_, _) => NewGameFromFen()));
+        file.DropDownItems.Add(new ToolStripMenuItem("Новая партия", null, async (_, _) => await NewGameAsync()) { ShortcutKeys = Keys.Control | Keys.N });
+        file.DropDownItems.Add(new ToolStripMenuItem("Новая партия из позиции (FEN)…", null, async (_, _) => await NewGameFromFenAsync()));
         file.DropDownItems.Add(new ToolStripMenuItem("Редактор позиции…", null, async (_, _) => await BeginPositionEditAsync())
         {
             ShortcutKeys = Keys.Control | Keys.E
         });
         file.DropDownItems.Add(new ToolStripSeparator());
-        file.DropDownItems.Add(new ToolStripMenuItem("Открыть PGN…", null, (_, _) => OpenPgn()) { ShortcutKeys = Keys.Control | Keys.O });
+        file.DropDownItems.Add(new ToolStripMenuItem("Открыть PGN…", null, async (_, _) => await OpenPgnAsync()) { ShortcutKeys = Keys.Control | Keys.O });
         file.DropDownItems.Add(new ToolStripMenuItem("Сохранить PGN…", null, (_, _) => SavePgn()) { ShortcutKeys = Keys.Control | Keys.S });
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(new ToolStripMenuItem("Обрезать партию после текущего хода", null, (_, _) =>
@@ -344,10 +372,10 @@ public sealed class MainForm : Form
             if (_game.TruncateAfterCurrent()) RefreshAll();
         }));
         file.DropDownItems.Add(new ToolStripSeparator());
-        file.DropDownItems.Add(new ToolStripMenuItem("Вставить PGN из буфера", null, (_, _) => PastePgn()));
+        file.DropDownItems.Add(new ToolStripMenuItem("Вставить PGN из буфера", null, async (_, _) => await PastePgnAsync()));
         file.DropDownItems.Add(new ToolStripMenuItem("Копировать PGN в буфер", null, (_, _) => CopyPgn()));
         file.DropDownItems.Add(new ToolStripMenuItem("Копировать FEN", null, (_, _) => CopyFen()) { ShortcutKeys = Keys.Control | Keys.C });
-        file.DropDownItems.Add(new ToolStripMenuItem("Вставить FEN из буфера", null, (_, _) => LoadFen(Clipboard.GetText())) { ShortcutKeys = Keys.Control | Keys.V });
+        file.DropDownItems.Add(new ToolStripMenuItem("Вставить FEN из буфера", null, async (_, _) => await LoadFenAsync(Clipboard.GetText())) { ShortcutKeys = Keys.Control | Keys.V });
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(new ToolStripMenuItem("Выход", null, (_, _) => Close()));
 
@@ -394,6 +422,8 @@ public sealed class MainForm : Form
         engineMenu.DropDownItems.Add(new ToolStripSeparator());
         engineMenu.DropDownItems.Add(new ToolStripMenuItem("Настройки движка…", null, async (_, _) => await ShowEngineSettingsAsync()));
         engineMenu.DropDownItems.Add(new ToolStripMenuItem("Перезапустить движок", null, async (_, _) => await RestartEngineAsync()));
+        engineMenu.DropDownItems.Add(new ToolStripSeparator());
+        engineMenu.DropDownItems.Add(new ToolStripMenuItem("Журнал UCI…", null, (_, _) => ShowUciLog()));
 
         var help = new ToolStripMenuItem("Справка");
         help.DropDownItems.Add(new ToolStripMenuItem("Горячие клавиши и возможности", null, (_, _) => ShowHelp()));
@@ -429,10 +459,10 @@ public sealed class MainForm : Form
         _analysisButton.Click += (_, _) => ToggleAnalysis();
 
         var newGame = new ToolStripButton("Новая") { DisplayStyle = ToolStripItemDisplayStyle.Text };
-        newGame.Click += (_, _) => NewGame();
+        newGame.Click += async (_, _) => await NewGameAsync();
 
         var open = new ToolStripButton("Открыть PGN") { DisplayStyle = ToolStripItemDisplayStyle.Text };
-        open.Click += (_, _) => OpenPgn();
+        open.Click += async (_, _) => await OpenPgnAsync();
 
         var save = new ToolStripButton("Сохранить PGN") { DisplayStyle = ToolStripItemDisplayStyle.Text };
         save.Click += (_, _) => SavePgn();
@@ -487,6 +517,8 @@ public sealed class MainForm : Form
             e.Cancelled = dialog.ShowDialog(this) != DialogResult.OK;
             e.Selected = dialog.Selected;
         };
+
+        _board.ResultBannerDismissed += (_, _) => _bannerDismissedFor = _game.Current;
 
         _board.EditSquareClicked += (_, e) => _editorPanel.HandleSquareClick(e.Square, e.Button);
         _board.EditPieceDragged += (_, e) => _editorPanel.HandlePieceDrag(e.From, e.To);
@@ -582,43 +614,74 @@ public sealed class MainForm : Form
     {
         if (_editing) return;
         _game.AddMove(move);
-        RefreshAll();
-        _ = MaybeLetEngineMoveAsync();
+
+        // Если движок сейчас ответит, бесконечный анализ запускать незачем: его пришлось бы
+        // тут же гасить ради поиска хода — лишний круг stop/go на каждом ходу.
+        var engineAnswers = EngineShouldMove();
+        RefreshAll(startAnalysis: !engineAnswers);
+        if (engineAnswers) _ = MaybeLetEngineMoveAsync();
     }
 
-    private void NewGame()
+    /// <summary>
+    /// Единственный путь смены партии. Движок переводится в новую партию командой ucinewgame,
+    /// а её нельзя посылать во время поиска: настоящий Stockfish на этом зависает навсегда.
+    /// Поэтому идём через NewGameAsync, который сначала гасит анализ и дожидается bestmove.
+    /// </summary>
+    private async Task StartNewGameAsync(Game game)
     {
-        _game = new Game();
+        _game = game;
         _moveList.Game = _game;
-        _engine.NewGame();
-        RefreshAll();
-        _ = MaybeLetEngineMoveAsync();
+        _bannerDismissedFor = null;
+        RefreshAll(startAnalysis: false);
+        await ResetEngineForNewGameAsync();
+        if (!EngineShouldMove()) await RefreshAnalysisAsync();
+        await MaybeLetEngineMoveAsync();
     }
 
-    private void NewGameFromFen()
+    private async Task ResetEngineForNewGameAsync()
+    {
+        if (!_engine.IsRunning) return;
+        _analysisGeneration++;
+        try
+        {
+            await _engine.NewGameAsync();
+        }
+        catch (EngineUnresponsiveException ex)
+        {
+            await HandleEngineWedgedAsync(ex.Message);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or OperationCanceledException)
+        {
+            _searchStatus.Text = "Движок недоступен: " + ex.Message;
+        }
+    }
+
+    private Task NewGameAsync() => StartNewGameAsync(new Game());
+
+    private async Task NewGameFromFenAsync()
     {
         var fen = Prompt("Введите позицию в формате FEN:", "Новая партия из позиции", Position.StartFen);
         if (string.IsNullOrWhiteSpace(fen)) return;
-        LoadFen(fen);
+        await LoadFenAsync(fen);
     }
 
-    private void LoadFen(string fen)
+    private async Task LoadFenAsync(string fen)
     {
         if (string.IsNullOrWhiteSpace(fen)) return;
+        Game game;
         try
         {
             var position = Position.FromFen(fen.Trim());
-            _game = new Game(position.ToFen());
-            _moveList.Game = _game;
-            _engine.NewGame();
-            RefreshAll();
-            _ = MaybeLetEngineMoveAsync();
+            game = new Game(position.ToFen());
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, "Не удалось разобрать FEN: " + ex.Message, "Ошибка",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
         }
+
+        await StartNewGameAsync(game);
     }
 
     private void DeleteCurrentMove()
@@ -635,7 +698,7 @@ public sealed class MainForm : Form
         _settings.Save();
     }
 
-    private void OpenPgn()
+    private async Task OpenPgnAsync()
     {
         using var dialog = new OpenFileDialog
         {
@@ -644,11 +707,11 @@ public sealed class MainForm : Form
         };
         if (Directory.Exists(_settings.LastPgnDirectory)) dialog.InitialDirectory = _settings.LastPgnDirectory;
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        if (LoadPgnFile(dialog.FileName)) RefreshAll();
+        if (ReadPgnFile(dialog.FileName) is { } game) await StartNewGameAsync(game);
     }
 
-    /// <summary>Читает партию из файла. Возвращает false, если пользователь отказался или файл не подошёл.</summary>
-    private bool LoadPgnFile(string path)
+    /// <summary>Читает партию из файла. Возвращает null, если пользователь отказался или файл не подошёл.</summary>
+    private Game? ReadPgnFile(string path)
     {
         try
         {
@@ -658,24 +721,21 @@ public sealed class MainForm : Form
             {
                 MessageBox.Show(this, "В файле не найдено партий.", "Открытие PGN",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
+                return null;
             }
 
             var game = games.Count == 1 ? games[0] : ChooseGame(games);
-            if (game == null) return false;
+            if (game == null) return null;
 
-            _game = game;
-            _moveList.Game = _game;
             _settings.LastPgnDirectory = Path.GetDirectoryName(path);
             _settings.Save();
-            _engine.NewGame();
-            return true;
+            return game;
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, "Не удалось прочитать файл: " + ex.Message, "Ошибка",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return false;
+            return null;
         }
     }
 
@@ -748,22 +808,23 @@ public sealed class MainForm : Form
         _searchStatus.Text = "PGN скопирован в буфер обмена.";
     }
 
-    private void PastePgn()
+    private async Task PastePgnAsync()
     {
         var text = Clipboard.GetText();
         if (string.IsNullOrWhiteSpace(text)) return;
+        Game game;
         try
         {
-            _game = Pgn.Read(text);
-            _moveList.Game = _game;
-            _engine.NewGame();
-            RefreshAll();
+            game = Pgn.Read(text);
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, "Не удалось разобрать PGN: " + ex.Message, "Ошибка",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
         }
+
+        await StartNewGameAsync(game);
     }
 
     private void CopyFen()
@@ -808,10 +869,12 @@ public sealed class MainForm : Form
 
         _board.Mode = BoardMode.Edit;
         _board.LastMove = Chess.Move.None;
-        _board.ClearArrows();
         _lines.Clear();
         _linesView.Items.Clear();
+        _board.ClearArrows();
+        _adviceBox.Text = "Редактор позиции: анализ приостановлен.";
         _evalBar.Clear();
+        UpdateEngineControlsEnabled();
 
         _savedSplitterDistance = _rightSplit.SplitterDistance;
         _rightSplit.SplitterDistance = Math.Min(
@@ -849,7 +912,7 @@ public sealed class MainForm : Form
         SetPlayControlsEnabled(true);
         if (_savedSplitterDistance > 0) _rightSplit.SplitterDistance = _savedSplitterDistance;
 
-        if (apply && fen != null) LoadFen(fen);
+        if (apply && fen != null) _ = LoadFenAsync(fen);
         else RefreshAll();
     }
 
@@ -883,7 +946,7 @@ public sealed class MainForm : Form
 
     // -------------------------------------------------------- Обновление UI
 
-    private void RefreshAll()
+    private void RefreshAll(bool startAnalysis = true)
     {
         // В режиме редактора доской управляет панель расстановки, а не текущая партия.
         if (_editing) return;
@@ -908,33 +971,71 @@ public sealed class MainForm : Form
         UpdateResultStatus();
         UpdateStaticEvaluation();
 
+        ResetEngineOutput();
+        UpdateEngineControlsEnabled();
+
+        if (startAnalysis) _ = RefreshAnalysisAsync();
+    }
+
+    /// <summary>
+    /// Сбрасывает всё, что показывает движок. Без этого на экране оставался текст разбора
+    /// предыдущей позиции — он выглядит как ответ на текущую и сбивает с толку.
+    /// </summary>
+    private void ResetEngineOutput()
+    {
         _lines.Clear();
         _linesView.Items.Clear();
         _board.ClearArrows();
 
-        _ = RefreshAnalysisAsync();
+        if (!_engine.IsRunning)
+        {
+            _adviceBox.Text = "Движок не запущен.";
+            return;
+        }
+
+        _adviceBox.Text = _settings.AutoAnalyze
+            ? "Анализ…"
+            : "Анализ выключен (пробел включает).";
+    }
+
+    /// <summary>Кнопки движка доступны, только когда он свободен.</summary>
+    private void UpdateEngineControlsEnabled()
+    {
+        var free = _engine.IsRunning && !_engineBusyWithMove && _gameAnalysisCts == null && !_editing;
+        _hintButton.Enabled = free;
+        _playBestButton.Enabled = free;
     }
 
     private void UpdateResultStatus()
     {
-        var (state, reason) = _game.EvaluateState(_game.Current);
-        var text = state switch
+        var node = _game.Current;
+        var (state, reason) = _game.EvaluateState(node);
+
+        _resultStatus.Text = GameResultText.StatusLine(state, reason, node.Position);
+        _resultStatus.ForeColor = GameResultText.StatusColor(state);
+
+        UpdateResultBanner(node, state, reason);
+    }
+
+    /// <summary>
+    /// Показывает или снимает плашку с результатом. Закрытую вручную плашку не возвращаем,
+    /// пока не уйдём с этого хода.
+    /// </summary>
+    private void UpdateResultBanner(MoveNode node, GameResultState state, GameEndReason reason)
+    {
+        // Уходя с хода, забываем о закрытии: вернулись в конец партии — плашка снова на месте.
+        if (!ReferenceEquals(node, _bannerDismissedFor)) _bannerDismissedFor = null;
+
+        if (!GameResultText.ShouldShowBanner(state, node) || _bannerDismissedFor != null)
         {
-            GameResultState.WhiteWins => "Мат. Победа белых (1–0)",
-            GameResultState.BlackWins => "Мат. Победа чёрных (0–1)",
-            GameResultState.Draw => reason switch
-            {
-                GameEndReason.Stalemate => "Пат — ничья",
-                GameEndReason.InsufficientMaterial => "Недостаточно материала — ничья",
-                GameEndReason.FiftyMoveRule => "Правило 50 ходов — ничья",
-                GameEndReason.ThreefoldRepetition => "Троекратное повторение — ничья",
-                _ => "Ничья"
-            },
-            _ => _game.CurrentPosition.IsInCheck()
-                ? _game.CurrentPosition.SideToMove == PieceColor.White ? "Шах белому королю" : "Шах чёрному королю"
-                : _game.CurrentPosition.SideToMove == PieceColor.White ? "Ход белых" : "Ход чёрных"
-        };
-        _resultStatus.Text = text;
+            _board.ClearResultBanner();
+            return;
+        }
+
+        _board.ShowResultBanner(
+            GameResultText.Headline(state, reason),
+            GameResultText.Score(state),
+            GameResultText.BannerStyle(state));
     }
 
     /// <summary>Пока движок не дал оценку, показываем материальный баланс.</summary>
@@ -946,7 +1047,9 @@ public sealed class MainForm : Form
             _evalBar.SetEvaluation(node.EvalCp, node.MateIn);
             return;
         }
-        if (!_engine.IsRunning) _evalBar.SetEvaluation(_game.CurrentPosition.MaterialBalance() * 100, null);
+        // Пока движок не оценил новую позицию, показываем материал: иначе на шкале осталась бы
+        // оценка предыдущей позиции.
+        _evalBar.SetEvaluation(_game.CurrentPosition.MaterialBalance() * 100, null);
     }
 
     // ------------------------------------------------------------- Движок
@@ -974,39 +1077,137 @@ public sealed class MainForm : Form
         try
         {
             _engineStatus.Text = "Движок: запуск…";
+            _uciLog.Add("* запуск движка: " + path);
             _engine.Dispose();
             _engine = new UciEngine();
+            _engine.LogReceived += _uciLog.Append;
             _engine.InfoReceived += OnEngineInfo;
-            _engine.Exited += (_, _) => _engineStatus.Text = "Движок: завершился";
+            _engine.Exited += (_, _) =>
+            {
+                _engineStatus.Text = "Движок: завершился";
+                UpdateEngineControlsEnabled();
+            };
+            _engine.Unresponsive += (_, reason) => _ = HandleEngineWedgedAsync(reason);
 
             await _engine.StartAsync(path);
-            ApplyEngineOptions();
-            _engine.NewGame();
+            await ApplyEngineOptionsAsync();
+            await _engine.NewGameAsync();
 
             _settings.EnginePath = path;
             _settings.Save();
 
             _engineStatus.Text = $"Движок: {_engine.Name}";
             _adviceBox.Text = $"{_engine.Name} готов к работе.";
+            UpdateEngineControlsEnabled();
             await RefreshAnalysisAsync();
         }
         catch (Exception ex)
         {
             _engineStatus.Text = "Движок: ошибка запуска";
             _adviceBox.Text = "Не удалось запустить движок: " + ex.Message;
+            UpdateEngineControlsEnabled();
         }
     }
 
-    private void ApplyEngineOptions()
+    /// <summary>Передаёт настройки движку. Неподдерживаемые параметры обёртка пропускает сама.</summary>
+    private async Task ApplyEngineOptionsAsync()
     {
-        if (_engine.SupportsOption("Threads")) _engine.SetOption("Threads", _settings.Threads.ToString());
-        if (_engine.SupportsOption("Hash")) _engine.SetOption("Hash", _settings.HashMb.ToString());
-        if (_engine.SupportsOption("MultiPV")) _engine.SetOption("MultiPV", _settings.MultiPv.ToString());
-        if (_engine.SupportsOption("Skill Level")) _engine.SetOption("Skill Level", _settings.SkillLevel.ToString());
-        if (_engine.SupportsOption("UCI_LimitStrength"))
-            _engine.SetOption("UCI_LimitStrength", _settings.LimitStrength ? "true" : "false");
-        if (_settings.LimitStrength && _engine.SupportsOption("UCI_Elo"))
-            _engine.SetOption("UCI_Elo", _settings.EloRating.ToString());
+        var options = new List<KeyValuePair<string, string>>
+        {
+            new("Threads", _settings.Threads.ToString()),
+            new("Hash", _settings.HashMb.ToString()),
+            new("MultiPV", _settings.MultiPv.ToString()),
+            new("Skill Level", _settings.SkillLevel.ToString()),
+            new("UCI_LimitStrength", _settings.LimitStrength ? "true" : "false")
+        };
+        if (_settings.LimitStrength) options.Add(new KeyValuePair<string, string>("UCI_Elo", _settings.EloRating.ToString()));
+
+        await _engine.ApplyOptionsAsync(options);
+    }
+
+    /// <summary>
+    /// Движок перестал отвечать: процесс уже снят обёрткой, поднимаем его заново.
+    /// Повторный отказ в течение полуминуты не перезапускаем — иначе получится карусель.
+    /// </summary>
+    private async Task HandleEngineWedgedAsync(string reason)
+    {
+        if (_restartingEngine) return;
+
+        _uciLog.Add("* движок не отвечает: " + reason);
+        SaveHangReport(reason);
+
+        _engineStatus.Text = "Движок: не отвечает";
+        _engineBusyWithMove = false;
+        UpdateEngineControlsEnabled();
+        _board.InteractionEnabled = !_editing && _game.CurrentPosition.LegalMoves.Count > 0;
+
+        var path = _settings.EnginePath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            _searchStatus.Text = "Движок не отвечает: " + reason;
+            return;
+        }
+
+        if (DateTime.UtcNow - _lastEngineRestartUtc < TimeSpan.FromSeconds(30))
+        {
+            _searchStatus.Text = "Движок не отвечает: " + reason;
+            _adviceBox.Text =
+                "Движок повторно перестал отвечать (" + reason + ").\r\n\r\n" +
+                "Проверьте путь и настройки: меню «Движок» → «Настройки движка…», " +
+                "затем «Перезапустить движок».";
+            return;
+        }
+
+        _restartingEngine = true;
+        _lastEngineRestartUtc = DateTime.UtcNow;
+        _searchStatus.Text = "Движок не отвечает — перезапуск…";
+        try
+        {
+            await StartEngineAsync(path!);
+        }
+        catch (Exception ex)
+        {
+            _searchStatus.Text = "Не удалось перезапустить движок: " + ex.Message;
+        }
+        finally
+        {
+            _restartingEngine = false;
+        }
+    }
+
+    private void ShowUciLog()
+    {
+        if (_uciLogForm is { IsDisposed: false })
+        {
+            _uciLogForm.Activate();
+            return;
+        }
+
+        _uciLogForm = new UciLogForm(_uciLog);
+        _uciLogForm.FormClosed += (_, _) => _uciLogForm = null;
+        _uciLogForm.Show(this);
+    }
+
+    /// <summary>Сохраняет хвост журнала рядом с настройками — чтобы сбой можно было разобрать потом.</summary>
+    private void SaveHangReport(string reason)
+    {
+        try
+        {
+            var path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "ChessEmulator", "uci-hang.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+            var report = new StringBuilder();
+            report.AppendLine($"{DateTime.Now:u}  движок не отвечает: {reason}");
+            foreach (var entry in _uciLog.Tail(200)) report.AppendLine("    " + entry);
+            report.AppendLine();
+            File.AppendAllText(path, report.ToString(), Encoding.UTF8);
+        }
+        catch
+        {
+            // Журнал не критичен: не смогли записать — работаем дальше.
+        }
     }
 
     private async Task RestartEngineAsync()
@@ -1032,8 +1233,17 @@ public sealed class MainForm : Form
         }
         else
         {
-            await _engine.StopSearchAsync();
-            ApplyEngineOptions();
+            // ApplyOptionsAsync сам дождётся окончания поиска: setoption во время поиска
+            // настоящий Stockfish не переживает.
+            try
+            {
+                await ApplyEngineOptionsAsync();
+            }
+            catch (EngineUnresponsiveException ex)
+            {
+                await HandleEngineWedgedAsync(ex.Message);
+                return;
+            }
             await RefreshAnalysisAsync();
         }
     }
@@ -1078,11 +1288,17 @@ public sealed class MainForm : Form
             ? SearchLimits.ByDepth(_settings.AnalysisDepthLimit)
             : SearchLimits.AsInfinite();
 
+        if (generation != _analysisGeneration) return;
+
         try
         {
             await _engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(), limits);
         }
-        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException)
+        catch (EngineUnresponsiveException)
+        {
+            // Движок снят обёрткой; перезапуском займётся обработчик Unresponsive.
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or TimeoutException)
         {
             // Поиск прерван сменой позиции или остановкой движка.
         }
@@ -1241,11 +1457,14 @@ public sealed class MainForm : Form
         };
     }
 
+    /// <summary>Сейчас очередь движка ходить, и он может это сделать.</summary>
+    private bool EngineShouldMove() =>
+        !_editing && IsEngineTurn() && _engine.IsRunning && _gameAnalysisCts == null
+        && _game.CurrentPosition.LegalMoves.Count > 0;
+
     private async Task MaybeLetEngineMoveAsync()
     {
-        if (_editing) return;
-        if (!IsEngineTurn() || !_engine.IsRunning || _gameAnalysisCts != null) return;
-        if (_game.CurrentPosition.LegalMoves.Count == 0) return;
+        if (!EngineShouldMove()) return;
         await PlayEngineMoveAsync(applyToBoard: true);
     }
 
@@ -1262,6 +1481,7 @@ public sealed class MainForm : Form
         if (_game.CurrentPosition.LegalMoves.Count == 0) return;
 
         _engineBusyWithMove = true;
+        UpdateEngineControlsEnabled();
         _board.InteractionEnabled = false;
         _searchStatus.Text = "Движок думает…";
 
@@ -1297,6 +1517,14 @@ public sealed class MainForm : Form
                                       : string.Empty);
             }
         }
+        catch (EngineUnresponsiveException ex)
+        {
+            _searchStatus.Text = "Движок не отвечает — перезапуск…";
+            _engineBusyWithMove = false;
+            UpdateEngineControlsEnabled();
+            await HandleEngineWedgedAsync(ex.Message);
+            return;
+        }
         catch (Exception ex)
         {
             _searchStatus.Text = "Ошибка движка: " + ex.Message;
@@ -1304,7 +1532,8 @@ public sealed class MainForm : Form
         finally
         {
             _engineBusyWithMove = false;
-            _board.InteractionEnabled = _game.CurrentPosition.LegalMoves.Count > 0;
+            UpdateEngineControlsEnabled();
+            _board.InteractionEnabled = !_editing && _game.CurrentPosition.LegalMoves.Count > 0;
             if (!applyToBoard) await RefreshAnalysisAsync();
         }
     }
@@ -1347,6 +1576,7 @@ public sealed class MainForm : Form
         _progress.Maximum = nodes.Count;
         _progress.Value = 0;
         _board.InteractionEnabled = false;
+        UpdateEngineControlsEnabled();
 
         try
         {
@@ -1401,7 +1631,8 @@ public sealed class MainForm : Form
             _gameAnalysisCts?.Dispose();
             _gameAnalysisCts = null;
             _progress.Visible = false;
-            _board.InteractionEnabled = _game.CurrentPosition.LegalMoves.Count > 0;
+            UpdateEngineControlsEnabled();
+            _board.InteractionEnabled = !_editing && _game.CurrentPosition.LegalMoves.Count > 0;
             _moveList.Reload();
             await RefreshAnalysisAsync();
         }

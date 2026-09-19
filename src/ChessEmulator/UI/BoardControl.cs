@@ -22,6 +22,9 @@ public sealed class PromotionEventArgs : EventArgs
 /// <summary>Стрелка на доске (подсказка движка).</summary>
 public readonly record struct BoardArrow(int From, int To, Color Color, float Weight = 1f);
 
+/// <summary>Цвета плашки с результатом партии: сама плашка, её текст и кайма со счётом.</summary>
+public readonly record struct BoardBannerStyle(Color Plate, Color Text, Color Accent);
+
 /// <summary>Режим доски: игра по правилам или свободная расстановка фигур.</summary>
 public enum BoardMode
 {
@@ -71,6 +74,10 @@ public sealed class BoardControl : Control
     private BoardMode _mode = BoardMode.Play;
     private Point _dragOrigin;
 
+    private string? _bannerHeadline;
+    private string _bannerScore = string.Empty;
+    private BoardBannerStyle _bannerStyle;
+
     private int _squareSize = 64;
     private Rectangle _boardRect;
 
@@ -80,6 +87,11 @@ public sealed class BoardControl : Control
     private static readonly Color SelectedTint = Color.FromArgb(140, 106, 190, 255);
     private static readonly Color CheckTint = Color.FromArgb(150, 220, 70, 60);
     private static readonly Color HoverTint = Color.FromArgb(60, 255, 255, 255);
+
+    // Плашка с результатом: доска под ней приглушена, сама плашка почти непрозрачна.
+    private static readonly Color BannerVeil = Color.FromArgb(120, 16, 16, 18);
+    private static readonly Color BannerShadow = Color.FromArgb(70, 0, 0, 0);
+    private const int BannerPlateAlpha = 240;
 
     public BoardControl()
     {
@@ -94,6 +106,9 @@ public sealed class BoardControl : Control
     public event EventHandler<PromotionEventArgs>? PromotionNeeded;
     public event EventHandler<EditSquareEventArgs>? EditSquareClicked;
     public event EventHandler<EditDragEventArgs>? EditPieceDragged;
+
+    /// <summary>Пользователь убрал плашку с результатом щелчком по доске.</summary>
+    public event EventHandler? ResultBannerDismissed;
 
     /// <summary>
     /// В режиме <see cref="BoardMode.Edit"/> доска не знает правил: она лишь сообщает о щелчках
@@ -111,6 +126,9 @@ public sealed class BoardControl : Control
             _targets.Clear();
             _dragging = false;
             _dragFrom = Sq.None;
+            // В редакторе расставляют фигуры, а не доигрывают партию: результата там нет.
+            _bannerHeadline = null;
+            _bannerScore = string.Empty;
             Invalidate();
         }
     }
@@ -174,6 +192,44 @@ public sealed class BoardControl : Control
         _selected = Sq.None;
         _targets.Clear();
         Invalidate();
+    }
+
+    // -------------------------------------------- Плашка с результатом партии
+
+    [Browsable(false)]
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool HasResultBanner => _bannerHeadline != null;
+
+    /// <summary>
+    /// Показывает поверх доски плашку с результатом партии. Повторный вызов с тем же текстом
+    /// ничего не перерисовывает: владелец зовёт это после каждого обновления доски.
+    /// </summary>
+    public void ShowResultBanner(string headline, string score, BoardBannerStyle style)
+    {
+        score ??= string.Empty;
+        if (_bannerHeadline == headline && _bannerScore == score && _bannerStyle == style) return;
+        _bannerHeadline = headline;
+        _bannerScore = score;
+        _bannerStyle = style;
+        Invalidate();
+    }
+
+    /// <summary>Убирает плашку молча — так её снимает сама программа.</summary>
+    public void ClearResultBanner()
+    {
+        if (_bannerHeadline == null) return;
+        _bannerHeadline = null;
+        _bannerScore = string.Empty;
+        Invalidate();
+    }
+
+    /// <summary>Плашку убрал пользователь: гасим и сообщаем, чтобы её не вернули тут же обратно.</summary>
+    private void DismissResultBanner()
+    {
+        _bannerHeadline = null;
+        _bannerScore = string.Empty;
+        Invalidate();
+        ResultBannerDismissed?.Invoke(this, EventArgs.Empty);
     }
 
     // ----------------------------------------------------------- Геометрия
@@ -275,6 +331,10 @@ public sealed class BoardControl : Control
 
         foreach (var arrow in _arrows) DrawArrow(g, arrow);
 
+        // Плашка ложится поверх позиции и стрелок, но под перетаскиваемую фигуру:
+        // ничья по повторению партию не заканчивает, играть можно и с плашкой на экране.
+        if (_bannerHeadline != null) DrawResultBanner(g);
+
         if (_dragging && _dragFrom != Sq.None)
         {
             var piece = _position[_dragFrom];
@@ -375,12 +435,116 @@ public sealed class BoardControl : Control
         g.FillPolygon(brush, new[] { tip, left, right });
     }
 
+    private void DrawResultBanner(Graphics g)
+    {
+        var headline = _bannerHeadline!;
+        var score = _bannerScore;
+
+        // ClearType по краям крупных букв на полупрозрачной плашке даёт цветную бахрому.
+        var hint = g.TextRenderingHint;
+        g.TextRenderingHint = TextRenderingHint.AntiAlias;
+
+        using var format = new StringFormat(StringFormatFlags.NoWrap)
+        {
+            Alignment = StringAlignment.Center,
+            LineAlignment = StringAlignment.Center
+        };
+
+        float padX = _squareSize * 0.5f, padY = _squareSize * 0.32f, gap = _squareSize * 0.08f;
+        var maxWidth = _boardRect.Width - _squareSize * 0.5f - 2 * padX;
+
+        using var headlineFont = FitFont(g, headline, maxWidth, _squareSize * 0.34f, format);
+        using var scoreFont = FitFont(g, score, maxWidth, _squareSize * 0.52f, format);
+
+        var headlineSize = g.MeasureString(headline, headlineFont, int.MaxValue, format);
+        var scoreSize = score.Length == 0 ? SizeF.Empty : g.MeasureString(score, scoreFont, int.MaxValue, format);
+
+        var width = Math.Min(_boardRect.Width - _squareSize * 0.5f,
+            Math.Max(headlineSize.Width, scoreSize.Width) + 2 * padX);
+        var height = Math.Min(_boardRect.Height - _squareSize * 0.5f,
+            headlineSize.Height + (score.Length == 0 ? 0 : gap + scoreSize.Height) + 2 * padY);
+
+        var plate = new RectangleF(
+            _boardRect.X + (_boardRect.Width - width) / 2f,
+            _boardRect.Y + (_boardRect.Height - height) / 2f,
+            width, height);
+        var radius = Math.Clamp(_squareSize * 0.2f, 4f, Math.Min(width, height) / 2f);
+
+        // Притенение — ровно по доске: со сглаживанием заливка мазнула бы и по рамке.
+        var smoothing = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.None;
+        using (var veil = new SolidBrush(BannerVeil)) g.FillRectangle(veil, _boardRect);
+        g.SmoothingMode = smoothing;
+
+        var shift = Math.Max(1f, _squareSize * 0.06f);
+        using (var shadowPath = RoundedPath(new RectangleF(plate.X, plate.Y + shift, plate.Width, plate.Height), radius))
+        using (var shadow = new SolidBrush(BannerShadow))
+            g.FillPath(shadow, shadowPath);
+
+        using (var path = RoundedPath(plate, radius))
+        {
+            using (var fill = new SolidBrush(Color.FromArgb(BannerPlateAlpha, _bannerStyle.Plate)))
+                g.FillPath(fill, path);
+            using (var pen = new Pen(_bannerStyle.Accent, Math.Max(2f, _squareSize * 0.04f)))
+                g.DrawPath(pen, path);
+        }
+
+        var textWidth = plate.Width - 2 * padX;
+        var headlineRect = new RectangleF(plate.X + padX, plate.Y + padY, textWidth, headlineSize.Height);
+        using (var brush = new SolidBrush(_bannerStyle.Text))
+            g.DrawString(headline, headlineFont, brush, headlineRect, format);
+
+        if (score.Length > 0)
+        {
+            var scoreRect = new RectangleF(plate.X + padX, headlineRect.Bottom + gap, textWidth, scoreSize.Height);
+            using var brush = new SolidBrush(_bannerStyle.Accent);
+            g.DrawString(score, scoreFont, brush, scoreRect, format);
+        }
+
+        g.TextRenderingHint = hint;
+    }
+
+    /// <summary>Прямоугольник со скруглёнными углами.</summary>
+    private static GraphicsPath RoundedPath(RectangleF r, float radius)
+    {
+        var d = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    /// <summary>
+    /// Шрифт, при котором строка укладывается в заданную ширину. Кегль задаётся в пикселях:
+    /// плашка обязана остаться внутри доски при любом масштабе экрана.
+    /// </summary>
+    private static Font FitFont(Graphics g, string text, float maxWidth, float pixels, StringFormat format)
+    {
+        const float minPixels = 8f;
+        var size = Math.Max(minPixels, pixels);
+        while (size > minPixels)
+        {
+            var font = new Font("Segoe UI", size, FontStyle.Bold, GraphicsUnit.Pixel);
+            if (text.Length == 0 || g.MeasureString(text, font, int.MaxValue, format).Width <= maxWidth) return font;
+            font.Dispose();
+            size = Math.Max(minPixels, size - Math.Max(1f, size * 0.08f));
+        }
+        return new Font("Segoe UI", minPixels, FontStyle.Bold, GraphicsUnit.Pixel);
+    }
+
     // --------------------------------------------------------------- Мышь
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
         Focus();
+
+        // Плашка закрывает середину доски, поэтому её убирает любой щелчок —
+        // при этом сам щелчок работает как обычно и не пропадает.
+        if (_bannerHeadline != null) DismissResultBanner();
 
         var square = SquareAt(e.Location);
         if (square == Sq.None) return;
