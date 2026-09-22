@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using ChessEmulator.App;
 using ChessEmulator.Chess;
@@ -26,12 +27,21 @@ public sealed class MainForm : Form
     private readonly TextBox _fenBox = new();
     private readonly TextBox _commentBox = new();
     private readonly ComboBox _playModeBox = new();
+    private readonly ComboBox _difficultyBox = new();
+    private readonly Label _difficultyHint = new();
     private readonly Button _hintButton = new();
     private readonly Button _playBestButton = new();
+
+    /// <summary>
+    /// Разброс ходов соперника на слабых уровнях. Поле, а не Random.Shared: всё крутится
+    /// в потоке интерфейса, зато при нужде датчик можно посеять.
+    /// </summary>
+    private readonly Random _random = new();
 
     private readonly StatusStrip _statusStrip = new();
     private readonly ToolStripStatusLabel _engineStatus = new();
     private readonly ToolStripStatusLabel _searchStatus = new();
+    private readonly ToolStripStatusLabel _opponentStatus = new();
     private readonly ToolStripStatusLabel _resultStatus = new();
     private readonly ToolStripProgressBar _progress = new();
 
@@ -191,15 +201,33 @@ public sealed class MainForm : Form
             BackColor = Color.FromArgb(32, 32, 34),
             Padding = new Padding(8)
         };
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        // Шапка в две строки: режим с кнопками и сложность. В одну строку они не влезают —
+        // при минимальной ширине окна правой панели достаётся всего 420 точек.
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));
 
         var header = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
+            FlowDirection = FlowDirection.TopDown,
             WrapContents = false
+        };
+
+        var modeRow = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = Padding.Empty
+        };
+
+        var difficultyRow = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = Padding.Empty
         };
 
         var modeLabel = new Label
@@ -226,10 +254,36 @@ public sealed class MainForm : Form
             new Padding(6, 2, 0, 0));
         _playBestButton.Click += async (_, _) => await PlayEngineMoveAsync(applyToBoard: true);
 
-        header.Controls.Add(modeLabel);
-        header.Controls.Add(_playModeBox);
-        header.Controls.Add(_hintButton);
-        header.Controls.Add(_playBestButton);
+        var difficultyLabel = new Label
+        {
+            Text = "Сложность:",
+            AutoSize = true,
+            ForeColor = Color.Gainsboro,
+            Margin = new Padding(0, 6, 4, 0)
+        };
+
+        _difficultyBox.Name = "difficultyBox";
+        _difficultyBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        _difficultyBox.Width = 150;
+        _difficultyBox.Items.AddRange(Difficulty.All.Select(p => (object)p.Title).ToArray());
+        _difficultyBox.SelectedIndex = Difficulty.IndexOf(_settings.Difficulty);
+
+        _difficultyHint.AutoSize = true;
+        _difficultyHint.ForeColor = Color.DimGray;
+        _difficultyHint.Margin = new Padding(8, 6, 0, 0);
+        _difficultyHint.Text = CurrentDifficulty().Hint;
+
+        modeRow.Controls.Add(modeLabel);
+        modeRow.Controls.Add(_playModeBox);
+        modeRow.Controls.Add(_hintButton);
+        modeRow.Controls.Add(_playBestButton);
+
+        difficultyRow.Controls.Add(difficultyLabel);
+        difficultyRow.Controls.Add(_difficultyBox);
+        difficultyRow.Controls.Add(_difficultyHint);
+
+        header.Controls.Add(modeRow);
+        header.Controls.Add(difficultyRow);
 
         _linesView.Dock = DockStyle.Fill;
         _linesView.View = View.Details;
@@ -522,10 +576,17 @@ public sealed class MainForm : Form
         _searchStatus.Text = string.Empty;
         _searchStatus.Spring = true;
         _searchStatus.TextAlign = ContentAlignment.MiddleLeft;
+        // Отдельная ячейка: строку поиска анализ переписывает на каждой строчке info,
+        // и сообщение о ходе соперника исчезало бы через долю секунды после появления.
+        _opponentStatus.Text = string.Empty;
+        _opponentStatus.ForeColor = Color.FromArgb(220, 200, 140);
         _resultStatus.Text = "Партия идёт";
         _progress.Visible = false;
         _progress.Width = 160;
-        _statusStrip.Items.AddRange(new ToolStripItem[] { _engineStatus, _searchStatus, _progress, _resultStatus });
+        _statusStrip.Items.AddRange(new ToolStripItem[]
+        {
+            _engineStatus, _searchStatus, _opponentStatus, _progress, _resultStatus
+        });
     }
 
     private void WireEvents()
@@ -556,6 +617,23 @@ public sealed class MainForm : Form
         _playModeBox.SelectedIndexChanged += async (_, _) =>
         {
             await MaybeLetEngineMoveAsync();
+        };
+
+        // Движку тут не уходит ничего: постоянные параметры всегда полной силы, ослабление
+        // собирается заново перед каждым ходом соперника. Поэтому смена уровня не способна
+        // ни прервать анализ, ни сломать ход, который сейчас считается.
+        _difficultyBox.SelectedIndexChanged += (_, _) =>
+        {
+            var index = Math.Clamp(_difficultyBox.SelectedIndex, 0, Difficulty.All.Count - 1);
+            var level = Difficulty.All[index].Level;
+            if (level == _settings.Difficulty) return;
+
+            _settings.Difficulty = level;
+            _settings.Save();
+
+            var profile = CurrentDifficulty();
+            _difficultyHint.Text = profile.Hint;
+            _searchStatus.Text = $"Сложность соперника: {profile.Title} — {profile.Hint}.";
         };
 
         FormClosing += (_, _) =>
@@ -899,6 +977,7 @@ public sealed class MainForm : Form
         _lines.Clear();
         _linesView.Items.Clear();
         _board.ClearArrows();
+        _opponentStatus.Text = string.Empty;
         _adviceBox.Text = "Редактор позиции: анализ приостановлен.";
         _evalBar.Clear();
         UpdateEngineControlsEnabled();
@@ -964,6 +1043,7 @@ public sealed class MainForm : Form
         _navPanel.Enabled = enabled;
         _commentBox.Enabled = enabled && !_game.Current.IsRoot;
         _playModeBox.Enabled = enabled;
+        _difficultyBox.Enabled = enabled;
 
         // Пункты меню отключаем целиком: их горячие клавиши (Ctrl+N, Ctrl+V и другие)
         // иначе сработают прямо из-под редактора и подменят партию.
@@ -1018,6 +1098,10 @@ public sealed class MainForm : Form
         _lines.Clear();
         _linesView.Items.Clear();
         _board.ClearArrows();
+
+        // Сообщение о ходе соперника относится к предыдущей позиции: при переходе на другой
+        // ход оно перестаёт быть правдой. Ход соперника выставит его заново уже после RefreshAll.
+        _opponentStatus.Text = string.Empty;
 
         // Проверяем раньше запущенности движка: панель пуста по воле пользователя, а состояние
         // движка и так видно в строке внизу.
@@ -1151,20 +1235,80 @@ public sealed class MainForm : Form
         }
     }
 
-    /// <summary>Передаёт настройки движку. Неподдерживаемые параметры обёртка пропускает сама.</summary>
+    /// <summary>
+    /// Передаёт движку постоянные настройки. Неподдерживаемые параметры обёртка пропускает сама.
+    /// Сила тут всегда полная: ослабление живёт ровно один ход соперника, чтобы шкала оценки,
+    /// стрелки, подсказки и разбор партии не врали вслед за выбранным уровнем.
+    /// </summary>
     private async Task ApplyEngineOptionsAsync()
     {
         var options = new List<KeyValuePair<string, string>>
         {
             new("Threads", _settings.Threads.ToString()),
-            new("Hash", _settings.HashMb.ToString()),
-            new("MultiPV", _settings.MultiPv.ToString()),
-            new("Skill Level", _settings.SkillLevel.ToString()),
-            new("UCI_LimitStrength", _settings.LimitStrength ? "true" : "false")
+            new("Hash", _settings.HashMb.ToString())
         };
-        if (_settings.LimitStrength) options.Add(new KeyValuePair<string, string>("UCI_Elo", _settings.EloRating.ToString()));
+        options.AddRange(Difficulty.FullStrengthOptions(_settings.MultiPv));
 
         await _engine.ApplyOptionsAsync(options);
+    }
+
+    /// <summary>Сложность соперника с подставленными ручными настройками диалога.</summary>
+    private DifficultyProfile CurrentDifficulty() => Difficulty.Resolve(
+        _settings.Difficulty,
+        new DifficultyDefaults(_settings.SkillLevel, _settings.LimitStrength,
+            _settings.EloRating, _settings.EngineMoveTimeMs, _settings.MultiPv));
+
+    /// <summary>
+    /// Возврат к полной силе после хода соперника. Threads и Hash сюда не входят: у обоих
+    /// в Stockfish есть обработчик изменения — хеш пересоздаёт и чистит таблицу перестановок,
+    /// потоки пересоздают пул. Дважды на каждый ход это заметная просадка.
+    /// </summary>
+    private async Task RestoreFullStrengthAsync()
+    {
+        try
+        {
+            await _engine.ApplyOptionsAsync(Difficulty.FullStrengthOptions(_settings.MultiPv));
+        }
+        catch (Exception ex) when (ex is EngineUnresponsiveException or InvalidOperationException
+                                       or TimeoutException or OperationCanceledException)
+        {
+            // Движок уже снят или закрыт: полную силу вернёт перезапуск, он выставляет
+            // параметры заново. Бросать отсюда нельзя — мы внутри finally и затёрли бы
+            // настоящую причину сбоя.
+        }
+    }
+
+    /// <summary>
+    /// Ход соперника ищется ослабленным движком, но ослабление живёт ровно один поиск:
+    /// полная сила возвращается до того, как ход попадёт на доску и запустится анализ.
+    /// </summary>
+    private async Task<SearchResult> SearchOpponentMoveAsync(DifficultyProfile profile)
+    {
+        var weakened = false;
+        try
+        {
+            if (!profile.IsFullStrength)
+            {
+                // ApplyOptionsAsync сам гасит текущий поиск и дожидается bestmove:
+                // setoption во время поиска настоящий Stockfish не переживает.
+                await _engine.ApplyOptionsAsync(
+                    Difficulty.OpponentOptions(profile, _engine.FindOption("UCI_Elo")));
+                weakened = true;
+            }
+
+            var limits = new SearchLimits
+            {
+                // Время ставим всегда, даже когда ограничение задаёт глубина: без него
+                // у поиска не будет жёсткого срока и его сторожит только молчание движка.
+                MoveTimeMs = profile.MoveTimeMs,
+                Depth = profile.DepthLimit > 0 ? profile.DepthLimit : null
+            };
+            return await _engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(), limits);
+        }
+        finally
+        {
+            if (weakened) await RestoreFullStrengthAsync();
+        }
     }
 
     /// <summary>
@@ -1552,10 +1696,15 @@ public sealed class MainForm : Form
     private async Task MaybeLetEngineMoveAsync()
     {
         if (!EngineShouldMove()) return;
-        await PlayEngineMoveAsync(applyToBoard: true);
+        await PlayEngineMoveAsync(applyToBoard: true, asOpponent: true);
     }
 
-    private async Task PlayEngineMoveAsync(bool applyToBoard)
+    /// <summary>
+    /// Ищет ход движком. Сложность применяется только когда движок играет за соперника:
+    /// «Подсказка» и «Сыграть лучший» отвечают на вопрос «а как надо?» и обязаны советовать
+    /// сильнейший ход, иначе человек сходил бы по совету и получил разнос от шкалы оценки.
+    /// </summary>
+    private async Task PlayEngineMoveAsync(bool applyToBoard, bool asOpponent = false)
     {
         if (_editing) return;
         if (!_engine.IsRunning)
@@ -1577,21 +1726,41 @@ public sealed class MainForm : Form
             _analysisGeneration++;
             await _engine.StopSearchAsync();
 
-            var result = await _engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(),
-                SearchLimits.ByTime(_settings.EngineMoveTimeMs));
+            var profile = asOpponent ? CurrentDifficulty() : Difficulty.For(DifficultyLevel.Maximum);
+            var started = Environment.TickCount64;
 
-            var raw = Chess.Move.FromUci(result.BestMove);
-            if (!_game.CurrentPosition.TryFindMove(raw.From, raw.To, raw.Promotion, out var move))
+            var result = asOpponent
+                ? await SearchOpponentMoveAsync(profile)
+                : await _engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(),
+                    SearchLimits.ByTime(_settings.EngineMoveTimeMs));
+            // Дальше движок снова на полной силе: возврат сделан внутри SearchOpponentMoveAsync,
+            // до того как ход попадёт на доску и RefreshAll запустит бесконечный анализ.
+
+            var choice = OpponentMovePicker.Pick(result, _game.CurrentPosition, profile, _random);
+            if (!choice.Found)
             {
                 _searchStatus.Text = "Движок не предложил ход.";
                 return;
             }
 
+            var move = choice.Move;
+
+            // На слабом уровне ход находится за единицы миллисекунд, а мгновенный ответ
+            // выглядит поломкой программы, а не игрой соперника.
+            if (asOpponent && profile.MinThinkMs > 0)
+            {
+                var left = profile.MinThinkMs - (int)(Environment.TickCount64 - started);
+                if (left > 0) await Task.Delay(left);
+            }
+
             if (applyToBoard)
             {
+                var san = _game.CurrentPosition.ToSan(move);
                 _engineBusyWithMove = false;
                 _game.AddMove(move);
                 RefreshAll();
+                // После RefreshAll: он сбрасывает ячейку вместе с остальным выводом движка.
+                if (asOpponent) _opponentStatus.Text = OpponentMoveText(profile, choice, san);
                 await MaybeLetEngineMoveAsync();
             }
             else
@@ -1625,9 +1794,34 @@ public sealed class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// Что показать в строке состояния после хода соперника. Уступку меньше десятой пешки
+    /// не называем: это шум округления, а не поддавки.
+    /// </summary>
+    private const int OpponentLossNoticeCp = 10;
+
+    private static string OpponentMoveText(DifficultyProfile profile, OpponentChoice choice, string san) =>
+        choice.Kind switch
+        {
+            OpponentPickKind.Random => $"Соперник ({profile.Title}) сыграл наугад: {san}.",
+            _ when choice.LossCp >= OpponentLossNoticeCp =>
+                $"Соперник ({profile.Title}): {san} — уступка " +
+                $"{(choice.LossCp / 100.0).ToString("0.00", CultureInfo.InvariantCulture)} пешки.",
+            _ => $"Соперник ({profile.Title}): {san}."
+        };
+
     private async Task AnalyzeWholeGameAsync()
     {
         if (_editing) return;
+
+        // Разбор вклинился бы между ослаблением и возвратом силы — и вся партия была бы
+        // разобрана движком соперника, а не полным.
+        if (_engineBusyWithMove)
+        {
+            MessageBox.Show(this, "Движок сейчас обдумывает ход.", "Разбор партии",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         if (!_engine.IsRunning)
         {
             MessageBox.Show(this, "Сначала укажите путь к Stockfish в настройках движка.",
@@ -1781,7 +1975,10 @@ public sealed class MainForm : Form
             "фигуры можно перетаскивать. Esc — выйти без изменений.\r\n\r\n" +
             "Ход, сделанный не в конце партии, создаёт вариант — кнопка ↑ делает его основной линией.\r\n" +
             "Двойной щелчок по строке анализа делает первый ход этого варианта на доске.\r\n" +
-            "«Разобрать партию» прогоняет движок по всем позициям и расставляет знаки ?!, ? и ??.",
+            "«Разобрать партию» прогоняет движок по всем позициям и расставляет знаки ?!, ? и ??.\r\n\r\n" +
+            "«Сложность» задаёт силу соперника и действует только на его ход: подсказки, шкала " +
+            "оценки, стрелки и разбор партии всегда считаются движком на полной силе.\r\n" +
+            "Поля «Уровень игры» и «Рейтинг Эло» в настройках движка работают при сложности «Своя».",
             "Возможности программы", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 

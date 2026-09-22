@@ -29,7 +29,7 @@ public sealed class EngineSettingsForm : Form
         StartPosition = FormStartPosition.CenterParent;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(560, 430);
+        ClientSize = new Size(560, 470);
         Font = new Font("Segoe UI", 9f);
 
         BuildLayout();
@@ -79,6 +79,18 @@ public sealed class EngineSettingsForm : Form
         layout.Controls.Add(_limitStrength, 1, row++);
 
         AddNumeric(layout, ref row, "Рейтинг Эло (UCI_Elo):", _elo, 500, 3200, 50);
+
+        // Подпись идёт после поля рейтинга и никогда между подписью и её полем: тесты ищут
+        // NumericUpDown, следующий за подписью в порядке обхода.
+        var strengthHint = new Label
+        {
+            Text = "Уровень игры и рейтинг действуют, когда выбрана сложность «Своя».",
+            AutoSize = true,
+            ForeColor = Color.DimGray,
+            MaximumSize = new Size(360, 0)
+        };
+        layout.Controls.Add(new Label { Text = string.Empty }, 0, row);
+        layout.Controls.Add(strengthHint, 1, row++);
 
         _status.AutoSize = true;
         _status.ForeColor = Color.DimGray;

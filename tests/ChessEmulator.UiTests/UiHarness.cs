@@ -42,6 +42,16 @@ internal static class UiHarness
     /// </summary>
     public static void Press(Control control) => Raise(control, "OnClick", EventArgs.Empty);
 
+    /// <summary>
+    /// Выбор пункта списка. Присваивания SelectedIndex мало: у контрола без созданного
+    /// дескриптора окна событие может не подняться, а показывать окна тесты не должны.
+    /// </summary>
+    public static void Select(ComboBox box, int index)
+    {
+        box.SelectedIndex = index;
+        Raise(box, "OnSelectedIndexChanged", EventArgs.Empty);
+    }
+
     /// <summary>Щелчок без перетаскивания: нажали и отпустили в одной точке.</summary>
     public static void Click(Control control, Point at, MouseButtons button = MouseButtons.Left)
     {

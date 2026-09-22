@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ChessEmulator.Engine;
 
 namespace ChessEmulator.App;
 
@@ -13,6 +14,22 @@ public sealed class AppSettings
     public int SkillLevel { get; set; } = 20;
     public bool LimitStrength { get; set; }
     public int EloRating { get; set; } = 1600;
+
+    /// <summary>
+    /// Уровень соперника в файле настроек. null означает файл, написанный версией без
+    /// этой настройки, — по нему <see cref="Clamp"/> решает, что человек имел в виду.
+    /// </summary>
+    [JsonPropertyName("Difficulty")]
+    [JsonConverter(typeof(JsonStringEnumConverter<DifficultyLevel>))]
+    public DifficultyLevel? DifficultyRaw { get; set; }
+
+    /// <summary>Уровень соперника. «Своя» отдаёт силу полям диалога настроек движка.</summary>
+    [JsonIgnore]
+    public DifficultyLevel Difficulty
+    {
+        get => DifficultyRaw ?? DifficultyLevel.Maximum;
+        set => DifficultyRaw = value;
+    }
 
     /// <summary>Ограничение глубины бесконечного анализа (0 — без ограничения).</summary>
     public int AnalysisDepthLimit { get; set; }
@@ -98,6 +115,13 @@ public sealed class AppSettings
         AnalysisDepthLimit = Math.Clamp(AnalysisDepthLimit, 0, 99);
         EngineMoveTimeMs = Math.Clamp(EngineMoveTimeMs, 1, 600_000);
         GameAnalysisMoveTimeMs = Math.Clamp(GameAnalysisMoveTimeMs, 1, 600_000);
+
+        // Файл без уровня написан версией, где Skill Level и рейтинг из диалога ослабляли
+        // движок всегда. Раз человек их трогал — оставляем ему «Свою», иначе соперник после
+        // обновления молча заиграл бы в полную силу.
+        DifficultyRaw = DifficultyRaw is { } level && Enum.IsDefined(level)
+            ? level
+            : SkillLevel < 20 || LimitStrength ? DifficultyLevel.Custom : DifficultyLevel.Maximum;
     }
 
     public void Save()

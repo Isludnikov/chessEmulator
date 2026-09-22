@@ -78,6 +78,22 @@ public class EngineSettingsFormTests
         Assert.False(elo.Enabled, "флажок сняли — поле снова заперто");
     }
 
+    [WinFormsFact(DisplayName = "Настройки движка: поля силы помечены как относящиеся к «Своей»")]
+    public void ПоляСилыПодписаны()
+    {
+        using var form = new EngineSettingsForm(new AppSettings());
+
+        // Сами по себе Skill Level и рейтинг ничего не ослабляют: они работают только при
+        // сложности «Своя», и без подписи это неочевидно.
+        Assert.NotNull(UiHarness.ByText<Label>(form,
+            "Уровень игры и рейтинг действуют, когда выбрана сложность «Своя»."));
+
+        // Подпись не должна встать между другой подписью и её полем: поиск идёт по порядку обхода.
+        Assert.Equal(20, Numeric(form, "Уровень игры (Skill Level):").Maximum);
+        Assert.Equal(3200, Numeric(form, "Рейтинг Эло (UCI_Elo):").Maximum);
+        Assert.Equal(10, Numeric(form, "Линий анализа (MultiPV):").Maximum);
+    }
+
     [WinFormsFact(DisplayName = "Настройки движка: ОК сохраняет, Отмена не трогает")]
     public void СохранениеИОтмена()
     {

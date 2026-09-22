@@ -30,6 +30,7 @@ public class SettingsTests(ITestOutputHelper output)
         Assert.True(defaults.ShowEngineHints, "подсказки движка включены");
         Assert.True(defaults.AnalysisRuns, "по умолчанию анализ идёт");
         Assert.False(defaults.BoardFlipped, "доска не перевёрнута");
+        Assert.Equal(DifficultyLevel.Maximum, defaults.Difficulty);  // соперник в полную силу
 
         // Полный круг через JSON — именно так настройки ложатся на диск
         var saved = new AppSettings
@@ -50,6 +51,7 @@ public class SettingsTests(ITestOutputHelper output)
             ShowBestMoveArrow = false,
             AutoAnalyze = false,
             ShowEngineHints = false,
+            Difficulty = DifficultyLevel.Expert,
             LastPgnDirectory = @"C:\партии"
         };
 
@@ -73,6 +75,10 @@ public class SettingsTests(ITestOutputHelper output)
         Assert.False(loaded.AutoAnalyze, "автоанализ выключен");
         Assert.False(loaded.ShowEngineHints, "подсказки движка выключены");
         Assert.Equal(saved.LastPgnDirectory, loaded.LastPgnDirectory);  // папка партий
+        Assert.Equal(DifficultyLevel.Expert, loaded.Difficulty);  // уровень соперника
+
+        // Уровень пишется словом: файл настроек правят руками, и «Expert» понятнее тройки.
+        Assert.Contains("\"Difficulty\": \"Expert\"", json);
 
         Assert.False(json.Contains("SettingsPath"), "служебный путь не попадает в файл");
         Assert.False(json.Contains("AnalysisRuns"), "производный флаг не попадает в файл");
@@ -147,6 +153,10 @@ public class SettingsTests(ITestOutputHelper output)
 
             File.WriteAllText(path, "{\"Threads\": null}");
             Assert.Equal(3, AppSettings.Load().MultiPv);  // неверный тип поля — не падаем
+
+            File.WriteAllText(path, "{\"Difficulty\": \"нетакого\"}");
+            // несуществующий уровень — значения по умолчанию, а не падение
+            Assert.Equal(DifficultyLevel.Maximum, AppSettings.Load().Difficulty);
         });
     }
 
@@ -158,7 +168,7 @@ public class SettingsTests(ITestOutputHelper output)
             File.WriteAllText(path,
                 "{\"Threads\": -4, \"HashMb\": 0, \"MultiPv\": 0, \"SkillLevel\": 99, " +
                 "\"EloRating\": 1, \"EngineMoveTimeMs\": -1, \"GameAnalysisMoveTimeMs\": 0, " +
-                "\"AnalysisDepthLimit\": -3}");
+                "\"AnalysisDepthLimit\": -3, \"Difficulty\": 77}");
 
             var loaded = AppSettings.Load();
             Assert.True(loaded.Threads >= 1, "потоков хотя бы один");
@@ -169,6 +179,32 @@ public class SettingsTests(ITestOutputHelper output)
             Assert.True(loaded.EngineMoveTimeMs >= 1, "время на ход положительное");
             Assert.True(loaded.GameAnalysisMoveTimeMs >= 1, "время на разбор положительное");
             Assert.True(loaded.AnalysisDepthLimit >= 0, "предел глубины не отрицательный");
+            // Несуществующий уровень — полная сила: ослабление должно быть осознанным,
+            // а Skill Level 99 к этому моменту уже поджат до 20 и ослаблением не считается.
+            Assert.Equal(DifficultyLevel.Maximum, loaded.Difficulty);
+        });
+    }
+
+    [Fact(DisplayName = "Настройки: старый файл с ослабленным движком переходит на «Свою»")]
+    public void СтарыйФайлПереходитНаСвоюСложность()
+    {
+        WithSettingsFile(path =>
+        {
+            // До появления уровней Skill Level и рейтинг из диалога ослабляли движок всегда.
+            // Раз человек их трогал, ослабление нельзя терять при обновлении.
+            File.WriteAllText(path, "{\"SkillLevel\": 5}");
+            Assert.Equal(DifficultyLevel.Custom, AppSettings.Load().Difficulty);
+
+            File.WriteAllText(path, "{\"SkillLevel\": 20, \"LimitStrength\": true}");
+            Assert.Equal(DifficultyLevel.Custom, AppSettings.Load().Difficulty);
+
+            // Движок не ослабляли — значит соперник и дальше играет в полную силу.
+            File.WriteAllText(path, "{\"SkillLevel\": 20, \"LimitStrength\": false}");
+            Assert.Equal(DifficultyLevel.Maximum, AppSettings.Load().Difficulty);
+
+            // Явно записанный уровень важнее догадок по старым полям.
+            File.WriteAllText(path, "{\"SkillLevel\": 5, \"Difficulty\": \"Club\"}");
+            Assert.Equal(DifficultyLevel.Club, AppSettings.Load().Difficulty);
         });
     }
 
