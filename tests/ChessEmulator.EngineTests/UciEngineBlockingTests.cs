@@ -1,4 +1,4 @@
-using ChessEmulator.Chess;
+﻿using ChessEmulator.Chess;
 using ChessEmulator.Engine;
 using Xunit;
 
@@ -190,6 +190,120 @@ public sealed class UciEngineBlockingTests
     private static List<string> Timeline(List<string> log)
     {
         lock (log) return new List<string>(log);
+    }
+
+    [Fact(DisplayName = "UCI: просроченный movetime останавливает поиск", Timeout = 30000)]
+    public async Task ПросроченныйMoveTime()
+    {
+        var log = new List<string>();
+        using var engine = await StartAsync("chatty", log);
+        engine.MoveTimeMargin = TimeSpan.FromMilliseconds(300);
+        engine.StopTimeout = TimeSpan.FromSeconds(5);
+        engine.SilenceTimeout = TimeSpan.FromSeconds(10);
+
+        // Движок болтает без умолку и сам не укладывается в movetime — остановить его
+        // должен сторож обёртки, а не таймер внутри движка.
+        var result = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByTime(100),
+            TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken);
+
+        Assert.Equal("e2e4", result.BestMove);  // ход получен
+        Assert.False(engine.IsWedged, "движок не объявлен зависшим");
+        Assert.Contains("stop", SentCommands(log));  // сторож послал stop
+    }
+
+    [Fact(DisplayName = "UCI: движок, не отвечающий на stop, объявляется зависшим", Timeout = 30000)]
+    public async Task ИгнорированиеStopПриводитКЗависанию()
+    {
+        using var engine = await StartAsync("deaf");
+        engine.MoveTimeMargin = TimeSpan.FromMilliseconds(200);
+        engine.StopTimeout = TimeSpan.FromMilliseconds(400);
+        engine.SilenceTimeout = TimeSpan.FromSeconds(10);  // движок не молчит, молчание ни при чём
+
+        var reason = string.Empty;
+        engine.Unresponsive += (_, text) => reason = text;
+
+        var error = await Assert.ThrowsAsync<EngineUnresponsiveException>(() =>
+            engine.GoAsync(Position.StartFen, null, SearchLimits.ByTime(100),
+                TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken));
+
+        Assert.Contains("не остановился", error.Message);  // причина названа верно
+        Assert.True(engine.IsWedged, "движок объявлен зависшим");
+        Assert.Contains("не остановился", reason);  // и об этом сообщено наружу
+        Assert.False(engine.IsRunning, "процесс снят");
+    }
+
+    [Fact(DisplayName = "UCI: молчание на isready объявляется зависанием", Timeout = 30000)]
+    public async Task МолчаниеНаIsReady()
+    {
+        using var engine = await StartAsync("deaf-ready");
+        engine.ReadyTimeout = TimeSpan.FromMilliseconds(400);
+
+        var error = await Assert.ThrowsAsync<EngineUnresponsiveException>(() =>
+            engine.IsReadyAsync(TestContext.Current.CancellationToken)
+                .WaitAsync(Short, TestContext.Current.CancellationToken));
+
+        Assert.Contains("isready", error.Message);  // причина названа верно
+        Assert.True(engine.IsWedged, "движок объявлен зависшим");
+
+        // С зависшим движком больше не разговариваем.
+        await Assert.ThrowsAsync<EngineUnresponsiveException>(() =>
+            engine.NewGameAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact(DisplayName = "UCI: молчание на uci прерывает запуск", Timeout = 30000)]
+    public async Task МолчаниеНаUci()
+    {
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+        using var engine = new UciEngine();
+        SynchronizationContext.SetSynchronizationContext(previous);
+
+        // Ни один настоящий движок не успевает подняться за миллисекунду.
+        engine.UciOkTimeout = TimeSpan.FromMilliseconds(1);
+
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            engine.StartAsync(UciEngineTests.EnginePath, TestContext.Current.CancellationToken)
+                .WaitAsync(Short, TestContext.Current.CancellationToken));
+
+        // Неудачный запуск не должен оставлять за собой живой процесс.
+        engine.Stop();
+        Assert.False(engine.IsRunning, "процесс не остался висеть");
+    }
+
+    [Fact(DisplayName = "UCI: отмена по токену до начала поиска", Timeout = 30000)]
+    public async Task ОтменаДоНачалаПоиска()
+    {
+        using var engine = await StartAsync("lenient");
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        // Команды с уже отменённым токеном не должны ни зависать, ни ломать движок.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.NewGameAsync(cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => engine.IsReadyAsync(cts.Token));
+
+        Assert.False(engine.IsWedged, "движок цел");
+        var result = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken);
+        Assert.Equal("e2e4", result.BestMove);  // и продолжает работать
+    }
+
+    [Fact(DisplayName = "UCI: закрытие во время поиска", Timeout = 30000)]
+    public async Task ЗакрытиеВоВремяПоиска()
+    {
+        var engine = await StartAsync("chatty");
+        var search = engine.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(),
+            TestContext.Current.CancellationToken);
+        await WaitForSearchAsync(engine);
+
+        engine.Dispose();
+        Assert.False(engine.IsRunning, "процесс движка снят");
+
+        // Задача поиска обязана завершиться — с ошибкой, но не висеть вечно.
+        var error = await Record.ExceptionAsync(() => search.WaitAsync(Short, TestContext.Current.CancellationToken));
+        Assert.NotNull(error);  // поиск завершился ошибкой, а не зависанием
+        Assert.IsNotType<TimeoutException>(error);  // и не по нашему собственному ожиданию
+
+        engine.Dispose();  // повторное закрытие ничего не ломает
     }
 
     private static List<string> SentCommands(List<string> log)

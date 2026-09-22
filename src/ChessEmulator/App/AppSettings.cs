@@ -28,23 +28,52 @@ public sealed class AppSettings
     public bool ShowLegalMoveHints { get; set; } = true;
     public bool ShowBestMoveArrow { get; set; } = true;
     public bool AutoAnalyze { get; set; } = true;
+
+    /// <summary>Показывать подсказки движка: панель советов, стрелки и список вариантов.</summary>
+    public bool ShowEngineHints { get; set; } = true;
+
+    /// <summary>
+    /// Идёт ли постоянный анализ. Своим переключателем анализ только включают: при выключенных
+    /// подсказках он всё равно стоит — показывать его результат некуда, а процессор он занимает
+    /// по-настоящему.
+    /// </summary>
+    [JsonIgnore]
+    public bool AnalysisRuns => AutoAnalyze && ShowEngineHints;
+
     public string? LastPgnDirectory { get; set; }
 
-    [JsonIgnore]
-    public static string SettingsPath { get; } = Path.Combine(
+    /// <summary>Переменная среды, которой тесты уводят настройки во временный файл.</summary>
+    public const string PathOverrideVariable = "CHESS_TESTS_SETTINGS";
+
+    private static readonly string DefaultPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "ChessEmulator",
         "settings.json");
+
+    [JsonIgnore]
+    public static string SettingsPath
+    {
+        get
+        {
+            var overridden = Environment.GetEnvironmentVariable(PathOverrideVariable);
+            return string.IsNullOrWhiteSpace(overridden) ? DefaultPath : overridden;
+        }
+    }
 
     public static AppSettings Load()
     {
         try
         {
-            if (File.Exists(SettingsPath))
+            var path = SettingsPath;
+            if (File.Exists(path))
             {
-                var json = File.ReadAllText(SettingsPath);
+                var json = File.ReadAllText(path);
                 var settings = JsonSerializer.Deserialize<AppSettings>(json);
-                if (settings != null) return settings;
+                if (settings != null)
+                {
+                    settings.Clamp();
+                    return settings;
+                }
             }
         }
         catch
@@ -54,14 +83,37 @@ public sealed class AppSettings
         return new AppSettings();
     }
 
+    /// <summary>
+    /// Приводит значения в рабочие пределы. Файл настроек правят руками, а нулевой MultiPV
+    /// или отрицательное время на ход уходят прямо в движок и ломают анализ без единого
+    /// сообщения об ошибке.
+    /// </summary>
+    public void Clamp()
+    {
+        Threads = Math.Clamp(Threads, 1, Math.Max(1, Environment.ProcessorCount));
+        HashMb = Math.Clamp(HashMb, 1, 65536);
+        MultiPv = Math.Clamp(MultiPv, 1, 10);
+        SkillLevel = Math.Clamp(SkillLevel, 0, 20);
+        EloRating = Math.Clamp(EloRating, 500, 4000);
+        AnalysisDepthLimit = Math.Clamp(AnalysisDepthLimit, 0, 99);
+        EngineMoveTimeMs = Math.Clamp(EngineMoveTimeMs, 1, 600_000);
+        GameAnalysisMoveTimeMs = Math.Clamp(GameAnalysisMoveTimeMs, 1, 600_000);
+    }
+
     public void Save()
     {
         try
         {
-            var dir = Path.GetDirectoryName(SettingsPath)!;
-            Directory.CreateDirectory(dir);
+            var path = SettingsPath;
+            var dir = Path.GetDirectoryName(path)!;
+            if (dir.Length > 0) Directory.CreateDirectory(dir);
             var json = JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(SettingsPath, json);
+
+            // Пишем через временный файл: обрыв записи не должен оставить обрезанный JSON,
+            // из-за которого при следующем запуске потеряются все настройки сразу.
+            var temp = path + ".tmp";
+            File.WriteAllText(temp, json);
+            File.Move(temp, path, overwrite: true);
         }
         catch
         {

@@ -64,8 +64,21 @@ public static class Pgn
         sb.Append(node.San);
         if (!string.IsNullOrEmpty(node.Glyph)) sb.Append(node.Glyph);
         sb.Append(' ');
-        if (!string.IsNullOrWhiteSpace(node.Comment)) sb.Append('{').Append(node.Comment).Append("} ");
+        if (!string.IsNullOrWhiteSpace(node.Comment))
+            sb.Append('{').Append(SanitizeComment(node.Comment)).Append("} ");
     }
+
+    /// <summary>
+    /// В PGN внутри {…} нет экранирования, поэтому фигурные скобки из текста пользователя
+    /// закрыли бы комментарий досрочно, а остаток разобрался бы как ходы. Меняем их
+    /// на круглые, а переводы строк — на пробел.
+    /// </summary>
+    private static string SanitizeComment(string comment) => comment
+        .Replace('{', '(')
+        .Replace('}', ')')
+        .Replace("\r\n", " ")
+        .Replace('\r', ' ')
+        .Replace('\n', ' ');
 
     private static string Escape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
@@ -119,11 +132,13 @@ public static class Pgn
         var lines = text.Replace("\r\n", "\n").Split('\n');
         var current = new StringBuilder();
         var seenMoves = false;
+        var braceDepth = 0;
 
         foreach (var raw in lines)
         {
             var line = raw.Trim();
-            var isHeader = line.StartsWith("[") && line.EndsWith("]");
+            var isHeader = braceDepth == 0 && IsHeaderLine(line);
+            braceDepth = TrackBraces(raw, braceDepth);
 
             if (isHeader && seenMoves && current.Length > 0)
             {
@@ -139,15 +154,39 @@ public static class Pgn
         if (current.ToString().Trim().Length > 0) yield return current.ToString();
     }
 
+    /// <summary>
+    /// Заголовок партии — строка вида [Ключ "значение"]. Проверка нужна строгая: внутри
+    /// комментария законно встречается строка вроде [%eval 0.24] (так переносит запись
+    /// Lichess), и принимать её за заголовок значит разорвать партию надвое.
+    /// </summary>
+    private static bool IsHeaderLine(string line) =>
+        line.Length > 2 && line[0] == '[' && line[^1] == ']' &&
+        System.Text.RegularExpressions.Regex.IsMatch(line, "^\\[[A-Za-z][A-Za-z0-9_]*\\s+\"");
+
+    /// <summary>Глубина вложенности комментариев {…} после разбора строки.</summary>
+    private static int TrackBraces(string line, int depth)
+    {
+        foreach (var c in line)
+        {
+            if (c == '{') depth++;
+            else if (c == '}' && depth > 0) depth--;
+        }
+        return depth;
+    }
+
     private static Game? ParseSingle(string text)
     {
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var moveText = new StringBuilder();
 
+        var braceDepth = 0;
         foreach (var raw in text.Replace("\r\n", "\n").Split('\n'))
         {
             var line = raw.Trim();
-            if (line.StartsWith("[") && line.EndsWith("]"))
+            var isHeader = braceDepth == 0 && IsHeaderLine(line);
+            braceDepth = TrackBraces(raw, braceDepth);
+
+            if (isHeader)
             {
                 var firstQuote = line.IndexOf('"');
                 var lastQuote = line.LastIndexOf('"');
@@ -161,7 +200,8 @@ public static class Pgn
             }
             else if (!line.StartsWith("%"))
             {
-                moveText.Append(line).Append(' ');
+                // Перевод строки сохраняем: по нему заканчивается комментарий вида «; …».
+                moveText.Append(line).Append('\n');
             }
         }
 
@@ -174,7 +214,11 @@ public static class Pgn
         }
         catch (FormatException)
         {
+            // Заголовок FEN не разобрался — партия идёт от начальной позиции, и оставлять
+            // этот заголовок нельзя: записанный обратно PGN противоречил бы своим же ходам.
             game = new Game();
+            headers.Remove("FEN");
+            headers.Remove("SetUp");
         }
 
         foreach (var kv in headers) game.Headers[kv.Key] = kv.Value;
@@ -209,7 +253,9 @@ public static class Pgn
 
             if (c == ';')
             {
-                i = moveText.Length;
+                // Комментарий до конца строки, а не до конца партии.
+                var eol = moveText.IndexOf('\n', i);
+                i = eol < 0 ? moveText.Length : eol + 1;
                 continue;
             }
 
@@ -235,7 +281,9 @@ public static class Pgn
             {
                 var j = i + 1;
                 while (j < moveText.Length && char.IsDigit(moveText[j])) j++;
-                lastMoveNode?.Glyph = NagToSymbol(moveText.Substring(i + 1, j - i - 1));
+                // Знак, которого мы не знаем, не должен стирать уже разобранный «!?» с хода.
+                var symbol = NagToSymbol(moveText.Substring(i + 1, j - i - 1));
+                if (symbol != null && lastMoveNode != null) lastMoveNode.Glyph = symbol;
                 i = j;
                 continue;
             }

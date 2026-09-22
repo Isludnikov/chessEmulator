@@ -37,6 +37,11 @@ public sealed class MainForm : Form
 
     private ToolStripMenuItem _analysisMenuItem = null!;
     private ToolStripButton _analysisButton = null!;
+    private ToolStripMenuItem _engineHintsMenuItem = null!;
+    private ToolStripMenuItem _arrowMenuItem = null!;
+
+    /// <summary>Чем объясняем пустую панель советов, когда подсказки выключены.</summary>
+    private const string HintsOffText = "Подсказки движка выключены (H включает).";
 
     // Редактор позиции
     private readonly PositionEditorPanel _editorPanel = new();
@@ -78,6 +83,7 @@ public sealed class MainForm : Form
 
         BuildUi();
         WireEvents();
+        ApplyEngineHints();
 
         if (!string.IsNullOrEmpty(pgnPath) && ReadPgnFile(pgnPath) is { } startupGame)
         {
@@ -400,15 +406,29 @@ public sealed class MainForm : Form
             _board.Invalidate();
             _settings.Save();
         };
-        var arrowItem = new ToolStripMenuItem("Показывать стрелки лучших ходов", null, (_, _) => { }) { CheckOnClick = true, Checked = _settings.ShowBestMoveArrow };
-        arrowItem.Click += (_, _) =>
+        _arrowMenuItem = new ToolStripMenuItem("Показывать стрелки лучших ходов", null, (_, _) => { }) { CheckOnClick = true, Checked = _settings.ShowBestMoveArrow };
+        _arrowMenuItem.Click += (_, _) =>
         {
-            _settings.ShowBestMoveArrow = arrowItem.Checked;
-            if (!arrowItem.Checked) _board.ClearArrows();
+            _settings.ShowBestMoveArrow = _arrowMenuItem.Checked;
+            if (!_arrowMenuItem.Checked) _board.ClearArrows();
             else UpdateArrows();
             _settings.Save();
         };
-        view.DropDownItems.AddRange(new ToolStripItem[] { flipItem, coordsItem, hintsItem, arrowItem });
+
+        // Этот пункт стоит отдельно от прочих настроек вида: он гасит не только показ, но и сам
+        // анализ, поэтому ведёт себя как «Анализ включён» — галочку выставляет ApplyEngineHints,
+        // иначе горячая клавиша и меню разошлись бы в показаниях.
+        _engineHintsMenuItem = new ToolStripMenuItem("Подсказки движка", null, (_, _) => ToggleEngineHints())
+        {
+            CheckOnClick = false,
+            Checked = _settings.ShowEngineHints,
+            ShortcutKeyDisplayString = "H"
+        };
+
+        view.DropDownItems.AddRange(new ToolStripItem[]
+        {
+            flipItem, coordsItem, hintsItem, _arrowMenuItem, new ToolStripSeparator(), _engineHintsMenuItem
+        });
 
         var engineMenu = new ToolStripMenuItem("Движок");
         _analysisMenuItem = new ToolStripMenuItem("Анализ включён", null, (_, _) => ToggleAnalysis())
@@ -601,6 +621,13 @@ public sealed class MainForm : Form
                 if (!_commentBox.Focused && !_fenBox.Focused)
                 {
                     ToggleAnalysis();
+                    return true;
+                }
+                break;
+            case Keys.H:
+                if (!_commentBox.Focused && !_fenBox.Focused)
+                {
+                    ToggleEngineHints();
                     return true;
                 }
                 break;
@@ -910,6 +937,11 @@ public sealed class MainForm : Form
         _enginePanel.Visible = true;
         _editButton.Text = "Редактор позиции";
         SetPlayControlsEnabled(true);
+
+        // SetPlayControlsEnabled включает панель инструментов целиком, в том числе кнопку
+        // «Анализ», — возвращаем ей состояние, которое диктуют подсказки.
+        ApplyEngineHints();
+
         if (_savedSplitterDistance > 0) _rightSplit.SplitterDistance = _savedSplitterDistance;
 
         if (apply && fen != null) _ = LoadFenAsync(fen);
@@ -986,6 +1018,14 @@ public sealed class MainForm : Form
         _lines.Clear();
         _linesView.Items.Clear();
         _board.ClearArrows();
+
+        // Проверяем раньше запущенности движка: панель пуста по воле пользователя, а состояние
+        // движка и так видно в строке внизу.
+        if (!_settings.ShowEngineHints)
+        {
+            _adviceBox.Text = HintsOffText;
+            return;
+        }
 
         if (!_engine.IsRunning)
         {
@@ -1097,7 +1137,9 @@ public sealed class MainForm : Form
             _settings.Save();
 
             _engineStatus.Text = $"Движок: {_engine.Name}";
-            _adviceBox.Text = $"{_engine.Name} готов к работе.";
+            // Имя движка уже видно в строке состояния, поэтому при выключенных подсказках
+            // панель объясняет, почему она пуста, а не повторяет его.
+            _adviceBox.Text = _settings.ShowEngineHints ? $"{_engine.Name} готов к работе." : HintsOffText;
             UpdateEngineControlsEnabled();
             await RefreshAnalysisAsync();
         }
@@ -1248,8 +1290,53 @@ public sealed class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// Главный выключатель подсказок: убирает всё, что называет лучший ход, и заодно
+    /// останавливает постоянный анализ — прятать результат, продолжая его считать, значит
+    /// греть процессор впустую.
+    /// </summary>
+    private void ToggleEngineHints()
+    {
+        _settings.ShowEngineHints = !_settings.ShowEngineHints;
+        _settings.Save();
+        ApplyEngineHints();
+        _ = RefreshAnalysisAsync();
+    }
+
+    /// <summary>Приводит интерфейс в соответствие с настройкой подсказок.</summary>
+    private void ApplyEngineHints()
+    {
+        var on = _settings.ShowEngineHints;
+        _engineHintsMenuItem.Checked = on;
+
+        // Подчинённые переключатели гасим, а не переписываем: их галочки показывают запомненное
+        // состояние, к которому вернёмся, когда подсказки включат обратно.
+        _arrowMenuItem.Enabled = on;
+        _analysisMenuItem.Enabled = on;
+        _analysisButton.Enabled = on;
+
+        // Пустая таблица с шапкой «Оценка · Глубина · Вариант» выглядит как поломка, поэтому
+        // без подсказок убираем и шапку. Строку разметки не сворачиваем: высоты у панели
+        // фиксированные, и вместо списка осталась бы дыра.
+        _linesView.HeaderStyle = on ? ColumnHeaderStyle.Nonclickable : ColumnHeaderStyle.None;
+
+        if (_editing) return;
+
+        // Анализ встал — шкала возвращается к материалу или к сохранённой оценке разбора.
+        if (!on) UpdateStaticEvaluation();
+        ResetEngineOutput();
+    }
+
     private void ToggleAnalysis()
     {
+        // Пункт меню и кнопка сейчас серые, так что сюда попадают только пробелом. Промолчать
+        // нельзя: клавиша выглядела бы сломанной.
+        if (!_settings.ShowEngineHints)
+        {
+            _searchStatus.Text = HintsOffText;
+            return;
+        }
+
         _settings.AutoAnalyze = !_settings.AutoAnalyze;
         _settings.Save();
         _analysisMenuItem.Checked = _settings.AutoAnalyze;
@@ -1271,7 +1358,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (!_settings.AutoAnalyze || _engineBusyWithMove || _gameAnalysisCts != null)
+        if (!_settings.AnalysisRuns || _engineBusyWithMove || _gameAnalysisCts != null)
         {
             _searchStatus.Text = string.Empty;
             return;
@@ -1306,7 +1393,7 @@ public sealed class MainForm : Form
 
     private void OnEngineInfo(object? sender, EngineInfo info)
     {
-        if (_gameAnalysisCts != null || _engineBusyWithMove || _editing) return;
+        if (!_settings.ShowEngineHints || _gameAnalysisCts != null || _engineBusyWithMove || _editing) return;
         if (info.Pv.Length == 0) return;
 
         var position = _game.CurrentPosition;
@@ -1685,7 +1772,11 @@ public sealed class MainForm : Form
         MessageBox.Show(this,
             "Ходы: перетащите фигуру мышью или щёлкните по ней и по целевой клетке.\r\n" +
             "Стрелки ← → — назад/вперёд по партии, Home/End — в начало/конец, Del — удалить ход с продолжением.\r\n" +
-            "F — перевернуть доску, Пробел — включить/выключить анализ.\r\n\r\n" +
+            "F — перевернуть доску, Пробел — включить/выключить анализ, " +
+            "H — показать/скрыть подсказки движка.\r\n" +
+            "Без подсказок движок молчит: нет ни советов, ни стрелок, ни списка вариантов, " +
+            "и постоянный анализ не идёт. Кнопки «Подсказка», «Сыграть лучший» и " +
+            "«Разобрать партию» по-прежнему работают по запросу.\r\n\r\n" +
             "Ctrl+E — редактор позиции: выберите фигуру в палитре и щёлкайте по доске, правая кнопка убирает фигуру, " +
             "фигуры можно перетаскивать. Esc — выйти без изменений.\r\n\r\n" +
             "Ход, сделанный не в конце партии, создаёт вариант — кнопка ↑ делает его основной линией.\r\n" +

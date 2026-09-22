@@ -2,14 +2,18 @@
 //
 // Кроме UCI понимает служебные команды тестов:
 //   test-scenario <имя>  — что отвечать на следующую команду go
-//                          (default, mate, none, multipv, silent)
+//                          (default, mate, none, multipv, silent, garbage, bare)
 //   test-mode <имя>      — как вести себя циклу чтения команд:
 //                          lenient (по умолчанию) — команды читаются всегда, новый go отменяет
 //                              предыдущий поиск;
 //                          strict — как настоящий Stockfish: всё, кроме stop/quit/ponderhit,
 //                              сначала дожидается конца поиска, поэтому команда, посланная во
 //                              время поиска, вешает движок намертво;
-//                          wedge — после go движок молчит: ни bestmove, ни реакции на stop.
+//                          wedge — после go движок молчит: ни bestmove, ни реакции на stop;
+//                          chatty — сыпет info до самого stop, поэтому просроченный movetime
+//                              видно сторожу, а сторож молчания не срабатывает;
+//                          deaf — то же самое, но stop игнорируется: движок болтает вечно;
+//                          deaf-ready — на isready ответа нет.
 //   test-crash           — немедленно завершить процесс, как упавший движок
 using System;
 using System.Threading;
@@ -21,6 +25,9 @@ Task? searchTask = null;
 var scenario = "default";
 var strict = false;
 var wedge = false;
+var chatty = false;      // сыпать info во время всего поиска
+var ignoreStop = false;  // не реагировать на stop
+var deafReady = false;   // не отвечать на isready
 
 void Say(string text)
 {
@@ -47,6 +54,18 @@ void Search(bool infinite, CancellationToken token)
             Say("info depth 12 multipv 2 score cp 12 nodes 200 pv d2d4 d7d5");
             break;
 
+        case "garbage":
+            // Кривые строки: нечисловая оценка, номер варианта вне диапазона, пустой pv.
+            Say("info depth 4 multipv 1 score cp не-число nodes 100 pv e2e4 e7e5");
+            Say("info depth 5 multipv 0 score cp 33 nodes 200 pv d2d4 d7d5");
+            Say("info depth 6 multipv 1 score mate вечность nodes 300 pv g1f3");
+            break;
+
+        case "bare":
+            // Движок закончил поиск, не назвав хода.
+            Say("info depth 3 multipv 1 score cp 10 nodes 50 pv e2e4");
+            break;
+
         case "silent":
             // Только служебные строки без анализа — их обёртка игнорирует.
             Say("info string проверка связи");
@@ -68,11 +87,29 @@ void Search(bool infinite, CancellationToken token)
         return;
     }
 
+    if (chatty)
+    {
+        // Движок жив и постоянно докладывает о себе, поэтому сторож молчания молчит.
+        // Поиск идёт, пока не придёт stop, — а с ignoreStop не заканчивается никогда.
+        var depth = 1;
+        var until = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < until && (ignoreStop || !token.IsCancellationRequested))
+        {
+            Say($"info depth {depth++} multipv 1 score cp 20 nodes {depth * 100} pv e2e4 e7e5");
+            Thread.Sleep(50);
+        }
+        if (ignoreStop) return;
+        Say("bestmove e2e4 ponder e7e5");
+        return;
+    }
+
     if (infinite) token.WaitHandle.WaitOne(TimeSpan.FromSeconds(30));
     else Thread.Sleep(50);
 
     Say(scenario switch
     {
+        "bare" => "bestmove",
+        "garbage" => "bestmove e2e4 ponder",
         "none" => "bestmove (none)",
         "mate" => "bestmove d1h5",
         "multipv" => "bestmove e2e4",
@@ -93,7 +130,7 @@ while ((line = Console.ReadLine()) != null)
 {
     if (line == "stop")
     {
-        searchCts?.Cancel();
+        if (!ignoreStop) searchCts?.Cancel();
         continue;
     }
 
@@ -123,7 +160,7 @@ while ((line = Console.ReadLine()) != null)
     }
     else if (line == "isready")
     {
-        Say("readyok");
+        if (!deafReady) Say("readyok");
     }
     else if (line.StartsWith("test-scenario"))
     {
@@ -136,6 +173,9 @@ while ((line = Console.ReadLine()) != null)
         var name = parts.Length > 1 ? parts[1] : "lenient";
         strict = name == "strict";
         wedge = name == "wedge";
+        chatty = name is "chatty" or "deaf";
+        ignoreStop = name == "deaf";
+        deafReady = name == "deaf-ready";
     }
     else if (line == "test-crash")
     {

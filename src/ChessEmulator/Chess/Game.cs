@@ -97,11 +97,16 @@ public sealed class Game
 
     public void Reset(string? fen = null)
     {
-        StartFen = string.IsNullOrWhiteSpace(fen) ? Position.StartFen : fen!.Trim();
-        var start = Position.FromFen(StartFen);
+        // Позицию разбираем до того, как что-то менять: на неверном FEN Reset бросает
+        // исключение, и партия должна остаться прежней, а не наполовину сброшенной.
+        var requested = string.IsNullOrWhiteSpace(fen) ? Position.StartFen : fen!.Trim();
+        var start = Position.FromFen(requested);
+
+        StartFen = requested;
         Root = new MoveNode { Position = start, Ply = 0 };
         Current = Root;
         Headers["Result"] = "*";
+        _computedResult = null;
         Headers["Date"] = DateTime.Now.ToString("yyyy.MM.dd");
         if (StartFen != Position.StartFen)
         {
@@ -124,6 +129,7 @@ public sealed class Game
             if (child.Move == move)
             {
                 Current = child;
+                UpdateResultHeader();
                 OnChanged();
                 return child;
             }
@@ -188,6 +194,7 @@ public sealed class Game
         if (Current.IsRoot || Current.Parent == null) return false;
         var parent = Current.Parent;
         parent.Children.Remove(Current);
+        Detach(Current);
         Current = parent;
         UpdateResultHeader();
         OnChanged();
@@ -198,6 +205,7 @@ public sealed class Game
     public bool TruncateAfterCurrent()
     {
         if (Current.Children.Count == 0) return false;
+        foreach (var child in Current.Children) Detach(child);
         Current.Children.Clear();
         UpdateResultHeader();
         OnChanged();
@@ -221,9 +229,20 @@ public sealed class Game
             }
             node = parent;
         }
-        if (changed) OnChanged();
+        if (changed)
+        {
+            // Основная линия сменилась — вместе с ней могло смениться и окончание партии.
+            UpdateResultHeader();
+            OnChanged();
+        }
         return changed;
     }
+
+    /// <summary>
+    /// Отцепляет удалённое поддерево от партии. Без этого удержанная где-то ссылка
+    /// на удалённый узел выглядит живой: путь от корня у неё по-прежнему полный.
+    /// </summary>
+    private static void Detach(MoveNode node) => node.Parent = null;
 
     public IReadOnlyList<MoveNode> MainLine()
     {
@@ -274,18 +293,38 @@ public sealed class Game
         return (GameResultState.InProgress, GameEndReason.None);
     }
 
+    /// <summary>Результат, который мы посчитали сами: его можно снять, чужой — нет.</summary>
+    private string? _computedResult;
+
     private void UpdateResultHeader()
     {
         var line = MainLine();
         var last = line.Count > 0 ? line[^1] : Root;
         var (state, _) = EvaluateState(last);
-        Headers["Result"] = state switch
+
+        // Партия могла закончиться сдачей или соглашением — тогда результат известен только
+        // из заголовка, и правка ходов не повод его стирать. Поэтому сами мы трогаем заголовок
+        // лишь в двух случаях: окончание видно по позиции, либо мы же его туда и записали,
+        // а теперь основная линия изменилась и окончания больше нет.
+        var computed = state switch
         {
             GameResultState.WhiteWins => "1-0",
             GameResultState.BlackWins => "0-1",
             GameResultState.Draw => "1/2-1/2",
-            _ => Headers.TryGetValue("Result", out var r) && r != "*" && line.Count == 0 ? r : "*"
+            _ => null
         };
+
+        if (computed != null)
+        {
+            Headers["Result"] = computed;
+            _computedResult = computed;
+            return;
+        }
+
+        var recorded = Headers.TryGetValue("Result", out var r) ? r : null;
+        if (_computedResult != null && recorded == _computedResult) Headers["Result"] = "*";
+        else if (recorded == null) Headers["Result"] = "*";
+        _computedResult = null;
     }
 
     public void OnChanged() => Changed?.Invoke(this, EventArgs.Empty);

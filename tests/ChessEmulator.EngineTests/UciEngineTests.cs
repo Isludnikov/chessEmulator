@@ -1,4 +1,4 @@
-using ChessEmulator.Chess;
+﻿using ChessEmulator.Chess;
 using ChessEmulator.Engine;
 using Xunit;
 
@@ -177,6 +177,48 @@ public sealed class UciEngineTests : IAsyncLifetime
 
         Assert.Equal("(none)", none.BestMove);  // в законченной позиции хода нет
         Assert.Empty(none.Lines);  // в законченной позиции анализа нет
+    }
+
+    [Fact(DisplayName = "UCI: кривые строки анализа")]
+    public async Task КривыеСтроки()
+    {
+        var infos = new List<EngineInfo>();
+        _engine.InfoReceived += (_, info) => infos.Add(info);
+
+        _engine.Send("test-scenario garbage");
+        var result = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(6),
+            TestContext.Current.CancellationToken);
+        _engine.Send("test-scenario default");
+
+        var byDepth = infos.ToDictionary(i => i.Depth);
+
+        // Нечисловая оценка — это «оценки нет», а не «оценка ноль».
+        Assert.Null(byDepth[4].ScoreCp);  // строка с «score cp не-число»
+        Assert.Equal("—", byDepth[4].ScoreText(true));  // и на шкале это видно
+        Assert.Null(byDepth[6].ScoreMate);  // строка с «score mate вечность»
+
+        Assert.Equal(1, byDepth[5].MultiPv);  // нулевой номер варианта поднимается до первого
+        Assert.Equal(33, byDepth[5].ScoreCp);  // числовая оценка рядом с кривыми разобралась
+
+        Assert.Equal("e2e4", result.BestMove);  // ход получен
+        Assert.Null(result.Ponder);  // «ponder» без хода не превращается в ход
+    }
+
+    [Fact(DisplayName = "UCI: bestmove без хода")]
+    public async Task BestmoveБезХода()
+    {
+        _engine.Send("test-scenario bare");
+        var result = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken);
+        _engine.Send("test-scenario default");
+
+        Assert.Equal(string.Empty, result.BestMove);  // хода нет — и выдумывать его нечего
+        Assert.Null(result.Ponder);  // хода для обдумывания тоже нет
+
+        // Движок после этого жив и продолжает отвечать.
+        var next = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken);
+        Assert.Equal("e2e4", next.BestMove);  // следующий поиск в порядке
     }
 
     [Fact(DisplayName = "UCI: остановка поиска")]

@@ -28,6 +28,20 @@ internal static class UiHarness
     public static void MouseUp(Control control, Point at, MouseButtons button = MouseButtons.Left) =>
         Raise(control, "OnMouseUp", new MouseEventArgs(button, 1, at.X, at.Y, 0));
 
+    /// <summary>Событие OnMouseClick — его слушают контролы, которым не нужен весь цикл нажатия.</summary>
+    public static void MouseClick(Control control, Point at, MouseButtons button = MouseButtons.Left) =>
+        Raise(control, "OnMouseClick", new MouseEventArgs(button, 1, at.X, at.Y, 0));
+
+    /// <summary>Нажатие клавиши.</summary>
+    public static void KeyDown(Control control, Keys key) =>
+        Raise(control, "OnKeyDown", new KeyEventArgs(key));
+
+    /// <summary>
+    /// Нажатие кнопки внутри формы. PerformClick здесь не годится: он молча ничего не делает,
+    /// пока форма не показана, — а показывать окна тесты не должны.
+    /// </summary>
+    public static void Press(Control control) => Raise(control, "OnClick", EventArgs.Empty);
+
     /// <summary>Щелчок без перетаскивания: нажали и отпустили в одной точке.</summary>
     public static void Click(Control control, Point at, MouseButtons button = MouseButtons.Left)
     {

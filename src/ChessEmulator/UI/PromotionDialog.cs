@@ -55,22 +55,33 @@ public sealed class PromotionDialog : Form
     private static void DrawPiece(Graphics g, Piece piece, Rectangle rect) =>
         PieceRenderer.Draw(g, piece, rect);
 
+    /// <summary>
+    /// Номер фигуры под курсором или -1. Обычное деление здесь не годится: оно округляет
+    /// к нулю, и точка левее доски попала бы в первую клетку.
+    /// </summary>
+    private int IndexAt(Point point)
+    {
+        if (point.X < 0 || point.Y < 0 || point.Y >= Cell) return -1;
+        var index = point.X / Cell;
+        return index < Choices.Length ? index : -1;
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
-        var index = e.X / Cell;
-        if (index != _hovered)
-        {
-            _hovered = index >= 0 && index < Choices.Length ? index : -1;
-            Invalidate();
-        }
+        var index = IndexAt(e.Location);
+        if (index == _hovered) return;
+        _hovered = index;
+        Invalidate();
     }
 
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);
-        var index = e.X / Cell;
-        if (index < 0 || index >= Choices.Length) return;
+        // Превращение — выбор без возврата, поэтому случайная правая кнопка его не делает.
+        if (e.Button != MouseButtons.Left) return;
+        var index = IndexAt(e.Location);
+        if (index < 0) return;
         Selected = Choices[index];
         DialogResult = DialogResult.OK;
         Close();

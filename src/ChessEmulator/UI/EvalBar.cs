@@ -40,7 +40,8 @@ public sealed class EvalBar : Control
         if (mateIn.HasValue)
         {
             _target = mateIn.Value > 0 ? 1.0 : 0.0;
-            _text = mateIn.Value > 0 ? $"#{mateIn}" : $"#-{Math.Abs(mateIn.Value)}";
+            // «Мат в ноль» — мат уже на доске. Знака у нуля нет, писать «#-0» незачем.
+            _text = (mateIn.Value < 0 ? "#-" : "#") + Math.Abs(mateIn.Value);
         }
         else if (centipawns.HasValue)
         {

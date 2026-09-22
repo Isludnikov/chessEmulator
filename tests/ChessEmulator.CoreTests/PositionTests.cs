@@ -1,4 +1,4 @@
-using ChessEmulator.Chess;
+﻿using ChessEmulator.Chess;
 using Xunit;
 
 namespace ChessEmulator.CoreTests;
@@ -271,6 +271,75 @@ public class PositionTests
         var promo = Position.FromFen("8/P6k/8/8/8/8/8/4K3 w - - 0 1");
         // четыре варианта превращения
         Assert.Equal(4, promo.LegalMoves.Count(m => m.From == Sq.Parse("a7")));
+    }
+
+    // ------------------------------------------------ Противоречивый FEN
+
+    [Fact(DisplayName = "Позиция: FEN с невозможными правами и полем взятия")]
+    public void FenNormalization()
+    {
+        // Король не на e1, но права на рокировку заявлены: ходов e1g1/e1c1 быть не должно.
+        var kingOffE1 = Position.FromFen("4k3/8/8/8/8/8/4K3/R6R w KQ - 0 1");
+        Assert.Equal("-", CastlingField(kingOffE1.ToFen()));  // невозможные права сняты
+        Assert.DoesNotContain(kingOffE1.LegalMoves, m => m.From == Sq.Parse("e1"));  // нет ходов с пустой e1
+
+        // Ладья не на своём поле — соответствующее право снимается.
+        var rookOffH1 = Position.FromFen("r3k2r/8/8/8/8/8/8/R3K1R1 w KQkq - 0 1");
+        Assert.Equal("Qkq", CastlingField(rookOffH1.ToFen()));  // право K снято, остальные целы
+
+        // Поле взятия на проходе без пешки соперника перед ним.
+        var fakeEnPassant = Position.FromFen("4k3/8/8/8/8/3PQ3/8/4K3 w - e4 0 1");
+        Assert.Equal(Sq.None, fakeEnPassant.EnPassant);  // невозможное поле взятия снято
+        // ход пешкой d3-e4 не считается взятием и не убирает свою фигуру
+        Assert.DoesNotContain(fakeEnPassant.LegalMoves, m => m.From == Sq.Parse("d3") && m.To == Sq.Parse("e4"));
+
+        // Поле взятия не на своей горизонтали.
+        Assert.Equal(Sq.None, Position.FromFen("4k3/8/8/3pP3/8/8/8/4K3 w - d3 0 1").EnPassant);
+        // Настоящее поле взятия остаётся на месте.
+        Assert.Equal("d6", Sq.Name(Position.FromFen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1").EnPassant));
+
+        // Счётчики приводятся в допустимый диапазон, как в Position.Build.
+        Assert.Equal(0, Position.FromFen("4k3/8/8/8/8/8/8/4K3 w - - -5 1").HalfmoveClock);  // отрицательный счётчик
+        Assert.Equal(100, Position.FromFen("4k3/8/8/8/8/8/8/4K3 w - - 150 1").HalfmoveClock);  // счётчик больше 100
+    }
+
+    [Fact(DisplayName = "Позиция: ключ повторения")]
+    public void RepetitionKeys()
+    {
+        // Права на рокировку входят в ключ: позиция с правами и без них — разные.
+        Assert.NotEqual(Position.FromFen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").RepetitionKey(),
+            Position.FromFen("r3k2r/8/8/8/8/8/8/R3K2R w - - 0 1").RepetitionKey());
+
+        // Поле взятия на проходе учитывается, только если взятие действительно возможно.
+        var capturable = Position.FromFen("4k3/8/8/8/3pP3/8/8/4K3 b - e3 0 1");
+        Assert.Contains(" e3", capturable.RepetitionKey());  // пешка d4 может взять — поле в ключе
+
+        var notCapturable = Position.FromFen("3k4/7r/8/8/P7/8/8/R3K3 b - a3 0 1");
+        Assert.Equal(Position.FromFen("3k4/7r/8/8/P7/8/8/R3K3 b - - 0 1").RepetitionKey(),
+            notCapturable.RepetitionKey());  // взять некому — ключ как без поля
+
+        // Связанная по горизонтали пешка взять не может, значит и поле в ключ не идёт.
+        var pinned = Position.FromFen("8/8/8/K1pP3r/8/8/8/7k w - c6 0 1");
+        Assert.Equal(Position.FromFen("8/8/8/K1pP3r/8/8/8/7k w - - 0 1").RepetitionKey(),
+            pinned.RepetitionKey());  // взятие оставляет короля под шахом
+    }
+
+    [Fact(DisplayName = "Позиция: FEN с грубыми ошибками")]
+    public void FenGarbage()
+    {
+        // Ряд шире восьми клеток — разбор должен отказаться, а не молча свернуть доску.
+        Assert.Throws<FormatException>(() => Position.FromFen("ppppppppp/8/8/8/8/8/8/4K3 w - - 0 1"));
+        // Рядов больше восьми.
+        Assert.Throws<FormatException>(() => Position.FromFen("4k3/8/8/8/8/8/8/8/4K3 w - - 0 1"));
+        // Неизвестная буква фигуры.
+        Assert.Throws<FormatException>(() => Position.FromFen("4k3/8/8/8/8/8/8/4X3 w - - 0 1"));
+
+        // Превращение распознаётся у обеих сторон.
+        var white = Position.FromFen("8/P6k/8/8/8/8/8/4K3 w - - 0 1");
+        Assert.True(white.IsPromotionMove(Sq.Parse("a7"), Sq.Parse("a8")), "белая пешка превращается");
+        var black = Position.FromFen("4k3/8/8/8/8/8/p7/7K b - - 0 1");
+        Assert.True(black.IsPromotionMove(Sq.Parse("a2"), Sq.Parse("a1")), "чёрная пешка превращается");
+        Assert.False(white.IsPromotionMove(Sq.Parse("e1"), Sq.Parse("e2")), "ход королём — не превращение");
     }
 
     [Fact(DisplayName = "Позиция: материал")]

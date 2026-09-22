@@ -1,4 +1,4 @@
-using ChessEmulator.Chess;
+﻿using ChessEmulator.Chess;
 using Xunit;
 
 namespace ChessEmulator.CoreTests;
@@ -144,6 +144,89 @@ public class PgnTests
         Assert.Equal("e4", setup.MainLine()[0].San);  // ход от расставленной позиции
         // испорченный FEN не ломает чтение
         Assert.Equal(Position.StartFen, Pgn.Read("[FEN \"мусор\"]\n\n1. e4 *").StartFen);
+    }
+
+    [Fact(DisplayName = "PGN: комментарий до конца строки, а не до конца партии")]
+    public void SemicolonCommentStopsAtLineEnd()
+    {
+        var game = Pgn.Read("1. e4 ; заметка к первому ходу\n1... e5 2. Nf3 Nc6 *");
+        // партия продолжается после строки с точкой с запятой
+        Assert.Equal("e4 e5 Nf3 Nc6", string.Join(" ", game.MainLine().Select(n => n.San)));
+
+        // Точка с запятой в последней строке по-прежнему съедает остаток строки.
+        Assert.Single(Pgn.Read("1. e4 ; остаток строки\n").MainLine());
+    }
+
+    [Fact(DisplayName = "PGN: комментарий с фигурными скобками не рвёт файл")]
+    public void CommentBracesAreSanitized()
+    {
+        var game = new Game();
+        Assert.True(game.TryAddSan("e4", out var node), "ход добавляется");
+        node!.Comment = "смотри вариант {a} и запись}";
+
+        var back = Pgn.Read(Pgn.Write(game));
+
+        Assert.Single(back.MainLine());  // ходы не потерялись
+        Assert.Equal("e4", back.MainLine()[0].San);  // ход разобрался
+        Assert.DoesNotContain("{", back.MainLine()[0].Comment ?? "");  // открывающая скобка убрана
+        Assert.DoesNotContain("}", back.MainLine()[0].Comment ?? "");  // закрывающая тоже
+        Assert.Contains("смотри вариант", back.MainLine()[0].Comment ?? "");  // текст сохранился
+
+        // Перевод строки внутри комментария не должен превращаться в разрыв записи.
+        var multiline = new Game();
+        Assert.True(multiline.TryAddSan("d4", out var d4), "ход добавляется");
+        d4!.Comment = "первая строка\nвторая строка";
+        Assert.Single(Pgn.Read(Pgn.Write(multiline)).MainLine());  // ход на месте
+    }
+
+    [Fact(DisplayName = "PGN: строка комментария в квадратных скобках не разрывает партию")]
+    public void BracketLineInsideCommentIsNotHeader()
+    {
+        // Так экспортирует Lichess: комментарий переносится, и строка начинается с [%eval ...].
+        const string pgn = "[Event \"Проба\"]\n\n1. e4 { белые играют\n[%eval 0.24]\nкоролевскую пешку } e5 2. Nf3 *\n";
+
+        var game = Pgn.Read(pgn);
+        // партия цела
+        Assert.Equal("e4 e5 Nf3", string.Join(" ", game.MainLine().Select(n => n.San)));
+        Assert.Single(Pgn.ReadAll(pgn));  // это одна партия, а не две
+    }
+
+    [Fact(DisplayName = "PGN: длинный комментарий не ломает перенос строк")]
+    public void LongTokenWrapping()
+    {
+        var game = new Game();
+        Assert.True(game.TryAddSan("e4", out var node), "ход добавляется");
+        node!.Comment = new string('ы', 100);
+
+        var text = Pgn.Write(game);
+        var body = text.Split('\n')
+            .Select(l => l.TrimEnd('\r'))
+            .SkipWhile(l => l.StartsWith("[") || l.Trim().Length == 0)
+            .ToList();
+
+        // пустых строк внутри записи ходов быть не должно
+        Assert.DoesNotContain(body.Take(Math.Max(0, body.Count - 1)), l => l.Trim().Length == 0);
+        Assert.Single(Pgn.Read(text).MainLine());  // и всё ещё читается обратно
+    }
+
+    [Fact(DisplayName = "PGN: неизвестный знак не стирает разобранный")]
+    public void UnknownNagKeepsGlyph()
+    {
+        // $14 («у белых чуть лучше») мы не умеем показывать, но это не повод терять «!?».
+        Assert.Equal("!?", Pgn.Read("1. e4!? $14 *").MainLine()[0].Glyph);  // знак с хода сохранён
+        Assert.Equal("!", Pgn.Read("1. e4 $1 $14 *").MainLine()[0].Glyph);  // известный знак сохранён
+        Assert.Null(Pgn.Read("1. e4 $14 *").MainLine()[0].Glyph);  // знака не было — и не появилось
+    }
+
+    [Fact(DisplayName = "PGN: неразобранный заголовок FEN не попадает в запись")]
+    public void BadFenHeaderIsDropped()
+    {
+        var game = Pgn.Read("[SetUp \"1\"]\n[FEN \"мусор\"]\n\n1. e4 e5 *");
+
+        Assert.Equal(Position.StartFen, game.StartFen);  // партия идёт от начальной позиции
+        Assert.False(game.Headers.ContainsKey("FEN"), "противоречивый заголовок FEN убран");
+        Assert.False(game.Headers.ContainsKey("SetUp"), "и SetUp вместе с ним");
+        Assert.DoesNotContain("мусор", Pgn.Write(game));  // запись не противоречит ходам
     }
 
     [Fact(DisplayName = "PGN: полный круг")]

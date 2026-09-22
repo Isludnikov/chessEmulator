@@ -361,18 +361,14 @@ public sealed class UciEngine : IDisposable
 
             var now = Environment.TickCount64;
             if (now - state.LastOutputTicks >= (long)SilenceTimeout.TotalMilliseconds)
-            {
-                MarkWedged($"движок молчит {SilenceTimeout.TotalSeconds:0} с во время поиска");
-                return await state.Tcs.Task.ConfigureAwait(false);  // бросит EngineUnresponsiveException
-            }
+                return await FailSearchAsync(state, $"движок молчит {SilenceTimeout.TotalSeconds:0} с во время поиска")
+                    .ConfigureAwait(false);
 
             if (state.DeadlineTicks is { } hard && now >= hard)
             {
                 if (state.StopRequested)
-                {
-                    MarkWedged("движок не остановился после истечения времени на ход");
-                    return await state.Tcs.Task.ConfigureAwait(false);
-                }
+                    return await FailSearchAsync(state, "движок не остановился после истечения времени на ход")
+                        .ConfigureAwait(false);
 
                 // Движок жив (строки идут), но просрочил movetime — просим остановиться.
                 state.StopRequested = true;
@@ -380,6 +376,18 @@ public sealed class UciEngine : IDisposable
                 state.DeadlineTicks = now + (long)StopTimeout.TotalMilliseconds;
             }
         }
+    }
+
+    /// <summary>
+    /// Объявляет движок зависшим и роняет ожидание поиска. Обычно ожидание роняет сам
+    /// MarkWedged, но если зависание объявили раньше нас, ронять уже нечего — тогда
+    /// бросаем сами, иначе поиск остался бы ждать bestmove, которого не будет.
+    /// </summary>
+    private async Task<SearchResult> FailSearchAsync(SearchState state, string reason)
+    {
+        MarkWedged(reason);
+        if (!state.Tcs.Task.IsCompleted) throw new EngineUnresponsiveException(reason);
+        return await state.Tcs.Task.ConfigureAwait(false);
     }
 
     /// <summary>Останавливает текущий поиск и ждёт, пока движок пришлёт bestmove.</summary>
@@ -447,8 +455,12 @@ public sealed class UciEngine : IDisposable
         Send("isready");
         if (!await WaitOrTimeoutAsync(_readyTcs.Task, ReadyTimeout, ct).ConfigureAwait(false))
         {
-            MarkWedged($"движок не ответил на isready за {ReadyTimeout.TotalSeconds:0} с");
-            ThrowIfWedged();
+            var reason = $"движок не ответил на isready за {ReadyTimeout.TotalSeconds:0} с";
+            MarkWedged(reason);
+            // Обычно MarkWedged роняет наше ожидание с этой же причиной. Но если зависание
+            // объявили раньше нас, ронять уже нечего — тогда называем причину сами, иначе
+            // остались бы ждать ответа, которого не будет.
+            if (!_readyTcs.Task.IsCompleted) throw new EngineUnresponsiveException(reason);
         }
         await _readyTcs.Task.ConfigureAwait(false);
     }
@@ -565,17 +577,25 @@ public sealed class UciEngine : IDisposable
                     while (i + 1 < tokens.Length)
                     {
                         var kind = tokens[i + 1];
+                        // Нечисловую оценку пропускаем: превратить её в ноль значит показать
+                        // на шкале уверенное равенство там, где движок ничего не сказал.
                         if (kind == "cp" && i + 2 < tokens.Length)
                         {
-                            info.ScoreCp = ParseInt(tokens[i + 2]);
+                            if (int.TryParse(tokens[i + 2], out var cp))
+                            {
+                                info.ScoreCp = cp;
+                                any = true;
+                            }
                             i += 2;
-                            any = true;
                         }
                         else if (kind == "mate" && i + 2 < tokens.Length)
                         {
-                            info.ScoreMate = ParseInt(tokens[i + 2]);
+                            if (int.TryParse(tokens[i + 2], out var mate))
+                            {
+                                info.ScoreMate = mate;
+                                any = true;
+                            }
                             i += 2;
-                            any = true;
                         }
                         else if (kind == "lowerbound")
                         {

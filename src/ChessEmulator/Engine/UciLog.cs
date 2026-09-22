@@ -10,7 +10,8 @@ public readonly record struct UciLogEntry(DateTime Time, string Text)
     /// <summary>Строка анализа. Их сотни в секунду, поэтому в окне они скрыты по умолчанию.</summary>
     public bool IsInfo => Text.StartsWith("< info", StringComparison.Ordinal);
 
-    public override string ToString() => Time.ToString("HH:mm:ss.fff ") + Text;
+    public override string ToString() =>
+        Time.ToString("HH:mm:ss.fff ", System.Globalization.CultureInfo.InvariantCulture) + Text;
 }
 
 /// <summary>
@@ -38,8 +39,12 @@ public sealed class UciLog
         {
             _entries.Enqueue(entry);
             while (_entries.Count > Capacity) _entries.Dequeue();
+
+            // Событие поднимаем под той же блокировкой: движок пишет в журнал из двух
+            // потоков (stdout и stderr), и порядок записей — это и есть улика при разборе
+            // зависания. Окно журнала должно видеть тот же порядок, что и снимок буфера.
+            EntryAdded?.Invoke(this, entry);
         }
-        EntryAdded?.Invoke(this, entry);
     }
 
     public UciLogEntry[] Snapshot()

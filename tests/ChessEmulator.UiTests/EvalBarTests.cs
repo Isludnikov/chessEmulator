@@ -1,4 +1,4 @@
-using Xunit;
+﻿using Xunit;
 using ChessEmulator.UI;
 
 namespace ChessEmulator.UiTests;
@@ -46,6 +46,33 @@ public class EvalBarTests
             narrow.SetEvaluation(50, null);
             UiHarness.Render(narrow).Dispose();
         }));
+    }
+
+    [WinFormsFact(DisplayName = "Шкала оценки: подпись мата")]
+    public void ПодписьМата()
+    {
+        using var bar = new EvalBar { ClientSize = new Size(Width, Height) };
+
+        bar.SetEvaluation(null, 3);
+        Assert.Equal("#3", Caption(bar));  // мат за белых
+
+        bar.SetEvaluation(null, -3);
+        Assert.Equal("#-3", Caption(bar));  // мат за чёрных
+
+        // «Мат в ноль» приходит от движка в уже заматованной позиции: знака у нуля нет.
+        bar.SetEvaluation(null, 0);
+        Assert.Equal("#0", Caption(bar));  // не «#-0»
+
+        bar.Clear();
+        Assert.Equal("—", Caption(bar));  // без оценки подписи нет
+    }
+
+    /// <summary>Подпись шкалы: текст рисуется в картинку, поэтому читаем его из поля.</summary>
+    private static string Caption(EvalBar bar)
+    {
+        var field = typeof(EvalBar).GetField("_text",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        return (string)field!.GetValue(bar)!;
     }
 
     /// <summary>Доля высоты шкалы, занятая белым цветом, после завершения анимации.</summary>

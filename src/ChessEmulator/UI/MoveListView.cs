@@ -69,9 +69,22 @@ public sealed class MoveListView : Panel
         Invalidate();
     }
 
+    /// <summary>
+    /// Пересчитывает раскладку, не дожидаясь отрисовки. Иначе сразу после Reload() список
+    /// хранит прежние ходы: только что добавленного хода в нём ещё нет, и прокрутка к нему
+    /// молча не срабатывает.
+    /// </summary>
+    private void EnsureLayout()
+    {
+        if (!_layoutDirty) return;
+        using var g = Graphics.FromHwnd(IntPtr.Zero);
+        BuildLayout(g);
+    }
+
     public void ScrollToCurrent()
     {
         if (_game == null) return;
+        EnsureLayout();
         var token = _tokens.FirstOrDefault(t => t.Kind == TokenKind.San && t.Node == _game.Current);
         if (token == null) return;
 
@@ -276,6 +289,8 @@ public sealed class MoveListView : Panel
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
+        // По записи ходят левой кнопкой: правая в списках привычно означает меню, а не переход.
+        if (e.Button != MouseButtons.Left) return;
         var token = HitTest(e.Location);
         if (token?.Node == null) return;
         NodeSelected?.Invoke(this, token.Node);

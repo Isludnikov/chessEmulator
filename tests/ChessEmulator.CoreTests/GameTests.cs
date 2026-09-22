@@ -1,4 +1,4 @@
-using ChessEmulator.Chess;
+﻿using ChessEmulator.Chess;
 using Xunit;
 
 namespace ChessEmulator.CoreTests;
@@ -199,6 +199,130 @@ public class GameTests
 
         var twofold = GameWith("Nf3", "Nf6", "Ng1", "Ng8");
         Assert.False(twofold.IsThreefoldRepetition(twofold.Current), "двукратного повторения мало");
+    }
+
+    [Fact(DisplayName = "Партия: повторение после хода пешкой через клетку")]
+    public void RepetitionAfterDoublePush()
+    {
+        // Белая пешка идёт на два поля, взять её на проходе некому.
+        // Дальше ладьи трижды возвращают одну и ту же позицию — это ничья по ФИДЕ 9.2.2:
+        // поле взятия на проходе различает позиции, только когда взятие реально возможно.
+        var game = new Game("3k4/7r/8/8/8/8/P7/R3K3 w - - 0 1");
+        foreach (var san in new[] { "a4", "Rh8", "Rb1", "Rh7", "Ra1", "Rh8", "Rb1", "Rh7", "Ra1" })
+            Assert.True(game.TryAddSan(san, out _), $"ход {san} находится");
+
+        Assert.True(game.IsThreefoldRepetition(game.Current), "троекратное повторение найдено");
+        // причина ничьей
+        Assert.Equal(GameEndReason.ThreefoldRepetition, game.EvaluateState(game.Current).Reason);
+    }
+
+    [Fact(DisplayName = "Партия: результат из PGN переживает правку")]
+    public void ResultHeaderSurvivesEditing()
+    {
+        // Партия, завершившаяся сдачей: финальная позиция не мат и не пат,
+        // поэтому результат известен только из заголовка и терять его нельзя.
+        var resigned = Pgn.Read("[Result \"1-0\"]\n\n1. e4 e5 2. Nf3 1-0");
+        Assert.Equal("1-0", resigned.Headers["Result"]);  // результат прочитан
+
+        resigned.GoToEnd();
+        Assert.True(resigned.TryAddSan("Nc6", out _), "ход добавляется");
+        Assert.Equal("1-0", resigned.Headers["Result"]);  // добавление хода не стирает результат
+
+        Assert.True(resigned.DeleteCurrent(), "ход удаляется");
+        Assert.Equal("1-0", resigned.Headers["Result"]);  // удаление хода не стирает результат
+
+        resigned.GoToStart();
+        Assert.True(resigned.TruncateAfterCurrent(), "обрезка выполняется");
+        Assert.Equal("1-0", resigned.Headers["Result"]);  // обрезка не стирает результат
+
+        // А вот настоящий мат в основной линии результат переписывает.
+        var mate = GameWith("f3", "e5", "g4");
+        mate.Headers["Result"] = "1-0";
+        Assert.True(mate.TryAddSan("Qh4", out _), "мат добавляется");
+        Assert.Equal("0-1", mate.Headers["Result"]);  // терминальное состояние сильнее заголовка
+    }
+
+    [Fact(DisplayName = "Партия: поднятие варианта обновляет результат")]
+    public void PromoteUpdatesResult()
+    {
+        // Основная линия — тихий ход, вариант заканчивается матом.
+        var game = GameWith("f3", "e5", "g4", "Nc6");
+        game.GoTo(game.MainLine()[2]);            // на 2.g4
+        Assert.True(game.TryAddSan("Qh4", out var mateNode), "вариант с матом добавляется");
+        Assert.Equal("*", game.Headers["Result"]);  // пока мат лежит в варианте, результата нет
+
+        game.GoTo(mateNode!);
+        Assert.True(game.PromoteToMainLine(), "вариант поднят в основную линию");
+        Assert.Equal("0-1", game.Headers["Result"]);  // мат стал основной линией — результат обновлён
+
+        // Обратное действие: поднимаем тихий ход, и результат снова открыт.
+        var g4 = game.MainLine()[2];
+        game.GoTo(g4.Children[1]);                // тихий ход, ушедший в вариант
+        Assert.True(game.PromoteToMainLine(), "тихий ход поднят обратно");
+        Assert.Equal("*", game.Headers["Result"]);  // мат ушёл в вариант — результата снова нет
+    }
+
+    [Fact(DisplayName = "Партия: неверный FEN не портит объект")]
+    public void ResetRejectsBadFen()
+    {
+        var game = GameWith("e4", "e5");
+        var before = game.StartFen;
+
+        Assert.Throws<FormatException>(() => game.Reset("не-фен"));
+        Assert.Equal(before, game.StartFen);  // стартовая позиция не испорчена
+        Assert.Contains("e4", Pgn.Write(game));  // запись PGN не противоречит ходам
+    }
+
+    [Fact(DisplayName = "Партия: удалённое поддерево отцеплено от дерева")]
+    public void DeletedSubtreeIsDetached()
+    {
+        var game = GameWith("e4", "e5", "Nf3");
+        var removed = game.MainLine()[2];          // 2.Nf3
+        game.GoTo(removed);
+        Assert.True(game.DeleteCurrent(), "ход удалён");
+
+        Assert.Null(removed.Parent);  // удалённый узел больше не смотрит в живое дерево
+        Assert.Empty(removed.PathFromRoot());  // и путь от корня больше не выглядит правдоподобным
+
+        var truncated = GameWith("e4", "e5", "Nf3");
+        var tail = truncated.MainLine()[1];
+        truncated.GoTo(truncated.MainLine()[0]);
+        Assert.True(truncated.TruncateAfterCurrent(), "хвост обрезан");
+        Assert.Null(tail.Parent);  // обрезанный хвост тоже отцеплен
+    }
+
+    [Fact(DisplayName = "Партия: навигация внутри варианта")]
+    public void NavigationInsideVariation()
+    {
+        var game = GameWith("e4", "e5", "Nf3");
+        game.GoTo(game.MainLine()[0]);                    // на 1.e4
+        Assert.True(game.TryAddSan("c5", out var sicilian), "вариант добавляется");
+        game.GoTo(sicilian!);
+        Assert.True(game.TryAddSan("Nf3", out _), "вариант продолжается");
+
+        game.GoTo(sicilian!);
+        game.GoToEnd();
+        // «В конец» внутри варианта доводит до конца этого варианта
+        Assert.Equal("Nf3", game.Current.San);
+        Assert.False(game.MainLine().Contains(game.Current), "и это не узел основной линии");
+
+        game.GoToStart();
+        game.GoToEnd();
+        // из корня «в конец» идёт по основной линии
+        Assert.Equal("e4 e5 Nf3", string.Join(" ", game.Current.PathFromRoot().Select(n => n.San)));
+    }
+
+    [Fact(DisplayName = "Партия: обрезка узла с вариантами")]
+    public void TruncateDropsVariations()
+    {
+        var game = GameWith("e4", "e5");
+        game.GoTo(game.MainLine()[0]);
+        Assert.True(game.TryAddSan("c5", out _), "вариант добавляется");
+
+        game.GoTo(game.MainLine()[0]);
+        Assert.Equal(2, game.Current.Children.Count);  // у хода e4 два продолжения
+        Assert.True(game.TruncateAfterCurrent(), "обрезка выполняется");
+        Assert.Empty(game.Current.Children);  // обрезка убирает и основную линию, и варианты
     }
 
     [Fact(DisplayName = "Партия: старт с расставленной позиции")]

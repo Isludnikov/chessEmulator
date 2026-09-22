@@ -27,7 +27,8 @@ public sealed class EngineInfo
     public string ScoreText(bool whiteToMove)
     {
         var mate = WhiteMate(whiteToMove);
-        if (mate.HasValue) return (mate.Value > 0 ? "#" : "#-") + Math.Abs(mate.Value);
+        // «score mate 0» движок присылает в уже заматованной позиции: знака у нуля нет.
+        if (mate.HasValue) return (mate.Value < 0 ? "#-" : "#") + Math.Abs(mate.Value);
         var cp = WhiteCp(whiteToMove);
         return cp.HasValue ? FormatPawns(cp.Value) : "—";
     }
@@ -84,7 +85,13 @@ public sealed class SearchResult
     /// <summary>Последние строки анализа по номеру MultiPV.</summary>
     public Dictionary<int, EngineInfo> Lines { get; } = new();
 
-    public EngineInfo? Best => Lines.TryGetValue(1, out var info) ? info : Lines.Values.FirstOrDefault();
+    /// <summary>
+    /// Главная линия. Строки MultiPV приходят от движка вперемешку, поэтому запасной
+    /// вариант выбирается по наименьшему номеру, а не по порядку прихода.
+    /// </summary>
+    public EngineInfo? Best => Lines.TryGetValue(1, out var info)
+        ? info
+        : Lines.Count == 0 ? null : Lines.OrderBy(kv => kv.Key).First().Value;
 }
 
 /// <summary>

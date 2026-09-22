@@ -81,7 +81,11 @@ public sealed class Position
             else
             {
                 if (!Sq.IsValid(file, rank)) throw new FormatException("Некорректная FEN-строка.");
-                pos._squares[Sq.Of(file, rank)] = Piece.FromFenChar(c).Value;
+                var piece = Piece.FromFenChar(c);
+                // Неизвестная буква — опечатка в чужом файле. Молча превратить её в пустую
+                // клетку значит показать пользователю не ту позицию, которую он вставил.
+                if (piece.IsEmpty) throw new FormatException($"Неизвестная фигура в FEN: '{c}'.");
+                pos._squares[Sq.Of(file, rank)] = piece.Value;
                 file++;
             }
         }
@@ -110,7 +114,15 @@ public sealed class Position
         pos.EnPassant = parts.Length > 3 && parts[3] != "-" ? Sq.Parse(parts[3]) : Sq.None;
         pos.HalfmoveClock = parts.Length > 4 && int.TryParse(parts[4], out var hm) ? hm : 0;
         pos.FullmoveNumber = parts.Length > 5 && int.TryParse(parts[5], out var fm) ? Math.Max(1, fm) : 1;
-        return pos;
+
+        // FEN приходит из буфера обмена и из чужих PGN, поэтому может противоречить доске:
+        // права на рокировку без короля или ладьи на исходном поле, поле взятия на проходе
+        // без пешки, которая туда шагнула. Генератор ходов таким расхождениям не рад — он
+        // выдаёт ходы несуществующими фигурами, — так что приводим позицию в порядок теми же
+        // правилами, что и редактор позиции.
+        var builder = PositionBuilder.FromPosition(pos);
+        builder.Normalize();
+        return builder.ToPosition();
     }
 
     public string ToFen()
@@ -156,13 +168,51 @@ public sealed class Position
         return sb.ToString();
     }
 
-    /// <summary>Ключ для поиска троекратного повторения: FEN без счётчиков ходов.</summary>
-    public string RepetitionKey()
+    private string? _repetitionKey;
+
+    /// <summary>
+    /// Ключ для поиска троекратного повторения: FEN без счётчиков ходов. Поле взятия
+    /// на проходе попадает в ключ, только когда взятие действительно возможно, — так
+    /// требует ФИДЕ 9.2.2, иначе ход пешкой через клетку навсегда «расщепляет» позицию.
+    /// </summary>
+    public string RepetitionKey() => _repetitionKey ??= BuildRepetitionKey();
+
+    private string BuildRepetitionKey()
     {
         var fen = ToFen();
         var lastSpace = fen.LastIndexOf(' ');
         var prevSpace = lastSpace > 0 ? fen.LastIndexOf(' ', lastSpace - 1) : -1;
-        return prevSpace > 0 ? fen[..prevSpace] : fen;
+        var key = prevSpace > 0 ? fen[..prevSpace] : fen;
+
+        if (EnPassant == Sq.None || HasEnPassantCapture()) return key;
+
+        var epSpace = key.LastIndexOf(' ');
+        return epSpace > 0 ? key[..epSpace] + " -" : key;
+    }
+
+    /// <summary>Может ли сторона на ходу взять на проходе прямо сейчас.</summary>
+    private bool HasEnPassantCapture()
+    {
+        if (EnPassant == Sq.None) return false;
+
+        // Сначала дешёвая проверка соседства: без пешки рядом считать ходы незачем.
+        var fromRank = Sq.Rank(EnPassant) + (SideToMove == PieceColor.White ? -1 : 1);
+        var pawn = new Piece(SideToMove, PieceType.Pawn).Value;
+        var file = Sq.File(EnPassant);
+        var adjacent = false;
+        for (var df = -1; df <= 1; df += 2)
+        {
+            var nf = file + df;
+            if (Sq.IsValid(nf, fromRank) && _squares[Sq.Of(nf, fromRank)] == pawn) adjacent = true;
+        }
+        if (!adjacent) return false;
+
+        // Пешка рядом есть, но она может быть связана — тогда взятия всё равно нет.
+        foreach (var move in LegalMoves)
+        {
+            if (IsEnPassantMove(move)) return true;
+        }
+        return false;
     }
 
     // -------------------------------------------------------- Атаки и шахи
@@ -429,6 +479,11 @@ public sealed class Position
     {
         var enemy = Other(me);
         if (IsInCheck(me)) return;
+
+        // Права на рокировку могут пережить короля на исходном поле, если позицию собрали
+        // через Build в обход FromFen. Без этой проверки рокировка «ходит» пустой клеткой.
+        var homeSquare = me == PieceColor.White ? 4 : 60;
+        if (!new Piece(_squares[homeSquare]).Is(me, PieceType.King)) return;
 
         if (me == PieceColor.White)
         {

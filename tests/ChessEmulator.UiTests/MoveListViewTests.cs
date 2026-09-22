@@ -1,4 +1,4 @@
-using ChessEmulator.Chess;
+﻿using ChessEmulator.Chess;
 using Xunit;
 using ChessEmulator.UI;
 
@@ -84,6 +84,53 @@ public class MoveListViewTests
             using var fresh = new MoveListView { ClientSize = new Size(320, 200), Game = new Game() };
             UiHarness.Render(fresh).Dispose();
         }));
+    }
+
+    [WinFormsFact(DisplayName = "Запись партии: раскладка готова сразу после Reload")]
+    public void LayoutReadyAfterReload()
+    {
+        // Кони ходят туда-обратно: так партию можно удлинять сколько угодно.
+        var game = new Game();
+        void Shuffle(int times)
+        {
+            for (var i = 0; i < times; i++)
+                foreach (var san in new[] { "Nf3", "Nf6", "Ng1", "Ng8" })
+                    Assert.True(game.TryAddSan(san, out _), $"ход {san} находится");
+        }
+
+        Shuffle(1);
+        using var view = new MoveListView { ClientSize = new Size(320, 120), Game = game };
+        UiHarness.Render(view).Dispose();               // первая отрисовка строит раскладку
+        var before = view.AutoScrollMinSize.Height;
+
+        Shuffle(20);
+        view.Reload();
+        view.ScrollToCurrent();
+
+        // Раскладка строилась только при отрисовке, поэтому сразу после Reload список ещё
+        // не знал о новых ходах — и прокрутка к последнему ходу молча не срабатывала.
+        Assert.True(view.AutoScrollMinSize.Height > before,
+            $"раскладка учла новые ходы, не дожидаясь отрисовки: было {before}, стало {view.AutoScrollMinSize.Height}");
+    }
+
+    [WinFormsFact(DisplayName = "Запись партии: правая кнопка не выбирает ход")]
+    public void RightClickDoesNotSelect()
+    {
+        var game = SampleGame();
+        using var view = new MoveListView { ClientSize = new Size(320, 400), Game = game };
+        UiHarness.Render(view).Dispose();
+
+        MoveNode? selected = null;
+        view.NodeSelected += (_, node) => selected = node;
+
+        // Находим точку, где точно есть ход: левым щелчком она выбирается.
+        var point = new Point(30, 12);
+        UiHarness.MouseDown(view, point);
+        Assert.NotNull(selected);  // левая кнопка выбирает ход
+
+        selected = null;
+        UiHarness.MouseDown(view, point, MouseButtons.Right);
+        Assert.Null(selected);  // правая — не выбирает
     }
 
     [WinFormsFact(DisplayName = "Запись партии: выбор хода мышью")]

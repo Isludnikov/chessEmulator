@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using ChessEmulator.Engine;
 using Xunit;
 
@@ -53,6 +53,34 @@ public class EngineTypesTests
 
         Assert.Equal(1, new EngineInfo().MultiPv);  // номер варианта по умолчанию
         Assert.Empty(new EngineInfo().Pv);  // пустой главный вариант
+    }
+
+    [Fact(DisplayName = "Движок: оценка мата в ноль")]
+    public void MateInZero()
+    {
+        // Движок отдаёт «score mate 0» в позиции, где мат уже стоит на доске.
+        var mated = new EngineInfo { ScoreMate = 0 };
+        Assert.Equal("#0", mated.ScoreText(true));  // мат, а не «мат в минус ноль»
+        Assert.Equal("#0", mated.ScoreText(false));  // и с точки зрения чёрных тоже
+
+        Assert.Equal("#1", new EngineInfo { ScoreMate = 1 }.ScoreText(true));  // мат в один ход
+        Assert.Equal("#-1", new EngineInfo { ScoreMate = 1 }.ScoreText(false));  // он же глазами чёрных
+    }
+
+    [Fact(DisplayName = "Движок: лучшая линия не зависит от порядка прихода")]
+    public void BestLineOrder()
+    {
+        // Строки MultiPV приходят вперемешку, и первая пришедшая — не обязательно лучшая.
+        var result = new SearchResult { BestMove = "e2e4" };
+        result.Lines[3] = new EngineInfo { MultiPv = 3, ScoreCp = -40 };
+        result.Lines[2] = new EngineInfo { MultiPv = 2, ScoreCp = 5 };
+
+        Assert.Equal(2, result.Best!.MultiPv);  // без первой линии берём следующую по номеру
+
+        result.Lines[1] = new EngineInfo { MultiPv = 1, ScoreCp = 60 };
+        Assert.Equal(1, result.Best!.MultiPv);  // первая линия всегда главнее
+
+        Assert.Null(new SearchResult().Best);  // без строк лучшей линии нет
     }
 
     [Fact(DisplayName = "Движок: ограничения поиска")]
