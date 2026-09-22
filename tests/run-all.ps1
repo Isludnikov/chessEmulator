@@ -1,4 +1,4 @@
-# Прогоняет все наборы тестов через xUnit. Ненулевой код возврата — что-то упало.
+﻿# Прогоняет все наборы тестов через xUnit. Ненулевой код возврата — что-то упало.
 # Ключ -Full добавляет глубокие прогоны perft (переменная среды CHESS_TESTS_FULL).
 param([switch]$Full, [Parameter(ValueFromRemainingArguments = $true)] $TestArgs)
 

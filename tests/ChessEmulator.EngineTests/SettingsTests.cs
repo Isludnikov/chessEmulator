@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using ChessEmulator.App;
 using ChessEmulator.Engine;
 using Xunit;

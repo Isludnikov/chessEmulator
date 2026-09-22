@@ -1,4 +1,4 @@
-﻿using ChessEmulator.App;
+using ChessEmulator.App;
 using ChessEmulator.UI;
 using Xunit;
 

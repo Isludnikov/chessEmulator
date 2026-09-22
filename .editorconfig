@@ -1,0 +1,21 @@
+# Единый образец для всего репозитория: UTF-8 без BOM и переносы CRLF.
+# Исключения — .ps1 и .sln: Windows PowerShell 5.1 и Visual Studio требуют BOM.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.ps1]
+charset = utf-8-bom
+
+[*.sln]
+charset = utf-8-bom
+indent_style = tab

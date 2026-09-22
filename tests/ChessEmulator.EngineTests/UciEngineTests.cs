@@ -1,4 +1,4 @@
-﻿using ChessEmulator.Chess;
+using ChessEmulator.Chess;
 using ChessEmulator.Engine;
 using Xunit;
 
