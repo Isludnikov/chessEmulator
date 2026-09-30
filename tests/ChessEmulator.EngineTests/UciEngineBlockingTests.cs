@@ -306,6 +306,121 @@ public sealed class UciEngineBlockingTests
         engine.Dispose();  // повторное закрытие ничего не ломает
     }
 
+    [Fact(DisplayName = "UCI: команды из разных потоков не перемешиваются", Timeout = 30000)]
+    public async Task ПараллельнаяЗапись()
+    {
+        var log = new List<string>();
+        using var engine = await StartAsync("lenient", log);
+
+        // Каждая испорченная строка потеряла бы свой readyok: считаем ответы сверх тех,
+        // что уже пришли при запуске.
+        const int count = 400;
+        int before;
+        lock (log) before = log.Count(l => l == "< readyok");
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            for (var i = 0; i < count / 8; i++) engine.Send("isready");
+        }, TestContext.Current.CancellationToken)));
+
+        // Рукопожатие обёртки — последнее в очереди, поэтому ответ на него приходит после всех.
+        await engine.IsReadyAsync(TestContext.Current.CancellationToken)
+            .WaitAsync(Short, TestContext.Current.CancellationToken);
+
+        int answers;
+        lock (log) answers = log.Count(l => l == "< readyok") - before;
+        Assert.Equal(count + 1, answers);  // ни одна команда не испорчена
+        Assert.False(engine.IsWedged, "движок цел");
+    }
+
+    [Fact(DisplayName = "UCI: закрытие не оставляет висеть тех, кто ждёт очереди", Timeout = 30000)]
+    public async Task ЗакрытиеСОчередью()
+    {
+        // Движок не слышит stop, поэтому операции копятся в очереди к нему.
+        var engine = await StartAsync("deaf");
+        engine.StopTimeout = TimeSpan.FromSeconds(20);
+        engine.SilenceTimeout = TimeSpan.FromSeconds(20);
+
+        var search = engine.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(),
+            TestContext.Current.CancellationToken);
+        await WaitForSearchAsync(engine);
+
+        var newGame = engine.NewGameAsync(TestContext.Current.CancellationToken);  // ждёт bestmove
+        var ready = engine.IsReadyAsync(TestContext.Current.CancellationToken);    // ждёт у турникета
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        engine.Dispose();
+
+        // Раньше семафоры освобождались вместе с движком, и ждущие не просыпались никогда.
+        foreach (var task in new[] { search, newGame, ready })
+        {
+            var error = await Record.ExceptionAsync(() => task.WaitAsync(Short, TestContext.Current.CancellationToken));
+            Assert.IsNotType<TimeoutException>(error);  // завершилась, а не повисла
+        }
+    }
+
+    [Fact(DisplayName = "UCI: отмена поиска по токену останавливает его", Timeout = 30000)]
+    public async Task ОтменаИдущегоПоиска()
+    {
+        var log = new List<string>();
+        using var engine = await StartAsync("strict", log);
+        using var cts = new CancellationTokenSource();
+
+        var search = engine.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(), cts.Token);
+        await WaitForSearchAsync(engine);
+        await cts.CancelAsync();
+
+        var result = await search.WaitAsync(Short, TestContext.Current.CancellationToken);
+        Assert.Equal("e2e4", result.BestMove);  // поиск доведён до bestmove
+        Assert.Contains("stop", SentCommands(log));
+        Assert.False(engine.IsWedged, "движок цел");
+    }
+
+    [Fact(DisplayName = "UCI: строки info помечены номером своего поиска", Timeout = 30000)]
+    public async Task НомерПоискаВInfo()
+    {
+        using var engine = await StartAsync("lenient");
+        var infos = new List<EngineInfo>();
+        engine.InfoReceived += (_, info) => { lock (infos) infos.Add(info); };
+
+        long first = 0, second = 0;
+        await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken, id => first = id)
+            .WaitAsync(Short, TestContext.Current.CancellationToken);
+        int firstCount;
+        lock (infos) firstCount = infos.Count;
+
+        await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken, id => second = id)
+            .WaitAsync(Short, TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(0, first);
+        Assert.NotEqual(first, second);  // у каждого поиска свой номер
+        lock (infos)
+        {
+            Assert.True(firstCount > 0 && infos.Count > firstCount, "оба поиска прислали info");
+            Assert.All(infos.Take(firstCount), i => Assert.Equal(first, i.SearchId));
+            Assert.All(infos.Skip(firstCount), i => Assert.Equal(second, i.SearchId));
+        }
+    }
+
+    [Fact(DisplayName = "UCI: повторный запуск не спотыкается о выход прежнего процесса", Timeout = 60000)]
+    public async Task ПовторныйЗапуск()
+    {
+        using var engine = await StartAsync("lenient");
+
+        // Exited снятого процесса раньше мог прийти, когда уже ждали uciok нового, и уронить запуск.
+        for (var i = 0; i < 5; i++)
+        {
+            await engine.StartAsync(UciEngineTests.EnginePath, TestContext.Current.CancellationToken)
+                .WaitAsync(Short, TestContext.Current.CancellationToken);
+        }
+
+        var result = await engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken);
+        Assert.Equal("e2e4", result.BestMove);
+        Assert.True(engine.IsRunning, "движок работает");
+    }
+
     private static List<string> SentCommands(List<string> log)
     {
         lock (log)

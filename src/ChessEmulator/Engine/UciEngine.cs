@@ -28,11 +28,23 @@ public sealed class UciEngine : IDisposable
 
     private readonly object _gate = new();
 
+    /// <summary>
+    /// Запись в stdin и снятие процесса. StreamWriter не потокобезопасен, а пишут в него сразу
+    /// несколько потоков: сторож, отмена по токену (поток того, кто отменил), владелец аренды.
+    /// Без блокировки stop мог бы вклиниться посреди «position … moves» — движок этого не переживёт.
+    /// </summary>
+    private readonly object _writeLock = new();
+
     private Process? _process;
     private TaskCompletionSource<bool>? _uciOkTcs;
     private TaskCompletionSource<bool>? _readyTcs;
     private SearchState? _search;
     private bool _disposed;
+
+    // Счётчики рукопожатий isready/readyok (под _gate), обнуляются при запуске процесса.
+    private long _readySent;
+    private long _readyAnswered;
+    private long _readyAwaited;
 
     public UciEngine() => _sync = SynchronizationContext.Current;
 
@@ -40,7 +52,20 @@ public sealed class UciEngine : IDisposable
     public string Name { get; private set; } = "—";
     public string Author { get; private set; } = string.Empty;
     public List<UciOption> Options { get; } = new();
-    public bool IsRunning => _process is { HasExited: false };
+    public bool IsRunning
+    {
+        get
+        {
+            var process = _process;
+            if (process == null) return false;
+            // Процесс могли снять и освободить из другого потока между чтением поля и вопросом.
+            try { return !process.HasExited; }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                return false;
+            }
+        }
+    }
     public bool IsSearching => _search is { Completed: false };
 
     /// <summary>Движок перестал отвечать; процесс снят, нужен перезапуск.</summary>
@@ -71,17 +96,29 @@ public sealed class UciEngine : IDisposable
     /// <summary>Движок не ответил в отведённое время. Процесс уже снят — нужен перезапуск.</summary>
     public event EventHandler<string>? Unresponsive;
 
+    private long _searchCounter;
+
     private sealed class SearchState
     {
         private long _lastOutput = Environment.TickCount64;
+
+        public SearchState(long id) => Id = id;
+
+        /// <summary>Номер поиска: им помечаются строки info (<see cref="EngineInfo.SearchId"/>).</summary>
+        public long Id { get; }
 
         public TaskCompletionSource<SearchResult> Tcs { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public SearchResult Result { get; } = new();
         public bool Completed => Tcs.Task.IsCompleted;
 
-        /// <summary>Команда stop уже отправлена сторожем.</summary>
-        public volatile bool StopRequested;
+        private long _stopSentAt;
+
+        /// <summary>Момент первой отправки stop (Environment.TickCount64), 0 — stop ещё не посылали.</summary>
+        public long StopSentTicks => Interlocked.Read(ref _stopSentAt);
+
+        /// <summary>Отмечает отправку stop. Считается первая: от неё и отсчитывается срок ответа.</summary>
+        public void MarkStopSent() => Interlocked.CompareExchange(ref _stopSentAt, Environment.TickCount64, 0);
 
         /// <summary>Момент (Environment.TickCount64), к которому движок обязан ответить. null — без срока.</summary>
         public long? DeadlineTicks { get; set; }
@@ -96,11 +133,8 @@ public sealed class UciEngine : IDisposable
         private readonly UciEngine _engine;
         public Lease(UciEngine engine) => _engine = engine;
 
-        public void Dispose()
-        {
-            // Движок могли закрыть, пока операция ждала ответа, — тогда семафора уже нет.
-            try { _engine._owner.Release(); } catch (ObjectDisposedException) { }
-        }
+        // Семафоры никогда не освобождаются (см. UciEngine.Dispose), поэтому Release всегда безопасен.
+        public void Dispose() => _engine._owner.Release();
     }
 
     // -------------------------------------------------------------- Запуск
@@ -127,24 +161,40 @@ public sealed class UciEngine : IDisposable
         };
 
         var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) HandleLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) Post(() => LogReceived?.Invoke(this, "! " + e.Data)); };
+        // Каждый обработчик сверяет процесс: запоздавшие строки и Exited уже снятого процесса
+        // иначе уронили бы ожидания нового (uciok, isready, поиск).
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null && ReferenceEquals(_process, process)) HandleLine(e.Data);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null && ReferenceEquals(_process, process))
+                Post(() => LogReceived?.Invoke(this, "! " + e.Data));
+        };
         process.Exited += (_, _) =>
         {
+            // Снятый нами процесс ожидания уже уронил в Stop; тут остаётся только внезапная смерть.
+            if (!ReferenceEquals(_process, process)) return;
             FailPendingOperations(new InvalidOperationException("Процесс движка завершился."));
             Post(() => Exited?.Invoke(this, EventArgs.Empty));
         };
 
         if (!process.Start()) throw new InvalidOperationException("Не удалось запустить процесс движка.");
 
+        // До начала чтения: иначе первые строки движка пришли бы, пока поле ещё пустое.
+        _process = process;
+
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
-
-        _process = process;
         ExecutablePath = executablePath;
         Name = Path.GetFileNameWithoutExtension(executablePath);
         Options.Clear();
-        lock (_gate) _search = null;
+        lock (_gate)
+        {
+            _search = null;
+            _readySent = _readyAnswered = _readyAwaited = 0;
+        }
         IsWedged = false;
 
         _uciOkTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -170,37 +220,41 @@ public sealed class UciEngine : IDisposable
     /// <summary>Останавливает движок. graceful: false — сразу Kill, без ожидания (движок завис).</summary>
     public void Stop(bool graceful)
     {
-        var process = _process;
-        _process = null;
+        // Останавливать могут одновременно интерфейс и сторож: процесс достаётся ровно одному.
+        var process = Interlocked.Exchange(ref _process, null);
         if (process == null) return;
 
         FailPendingOperations(new OperationCanceledException("Движок остановлен."));
 
-        try
+        // Под той же блокировкой, что и Send: иначе чужая запись попала бы в уже освобождённый поток.
+        lock (_writeLock)
         {
-            if (!process.HasExited)
+            try
             {
-                if (graceful)
+                if (!process.HasExited)
                 {
-                    process.StandardInput.WriteLine("stop");
-                    process.StandardInput.WriteLine("quit");
-                    process.StandardInput.Flush();
-                    if (!process.WaitForExit(1500)) process.Kill(entireProcessTree: true);
-                }
-                else
-                {
-                    // Зависший движок не читает ввод: просить его уйти бессмысленно.
-                    process.Kill(entireProcessTree: true);
+                    if (graceful)
+                    {
+                        process.StandardInput.WriteLine("stop");
+                        process.StandardInput.WriteLine("quit");
+                        process.StandardInput.Flush();
+                        if (!process.WaitForExit(1500)) process.Kill(entireProcessTree: true);
+                    }
+                    else
+                    {
+                        // Зависший движок не читает ввод: просить его уйти бессмысленно.
+                        process.Kill(entireProcessTree: true);
+                    }
                 }
             }
-        }
-        catch
-        {
-            try { process.Kill(entireProcessTree: true); } catch { /* уже завершён */ }
-        }
-        finally
-        {
-            process.Dispose();
+            catch
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* уже завершён */ }
+            }
+            finally
+            {
+                process.Dispose();
+            }
         }
     }
 
@@ -251,19 +305,27 @@ public sealed class UciEngine : IDisposable
 
     internal void Send(string command)
     {
-        var process = _process;
-        if (process == null || process.HasExited) return;
         // В зависший движок пишем только stop/quit: остальное всё равно никто не прочитает.
         if (IsWedged && command != "stop" && command != "quit") return;
-        try
+
+        lock (_writeLock)
         {
-            process.StandardInput.WriteLine(command);
-            process.StandardInput.Flush();
-            Post(() => LogReceived?.Invoke(this, "> " + command));
-        }
-        catch (IOException)
-        {
-            // Движок закрылся между проверкой и записью.
+            // Читаем под блокировкой: Stop снимает и освобождает процесс под ней же.
+            var process = _process;
+            if (process == null) return;
+            try
+            {
+                if (process.HasExited) return;
+                process.StandardInput.WriteLine(command);
+                process.StandardInput.Flush();
+                if (command == "isready") lock (_gate) _readySent++;
+                Post(() => LogReceived?.Invoke(this, "> " + command));
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+            {
+                // Движок закрылся между проверкой и записью. Бросать нельзя: Send зовётся и из
+                // обработчика отмены токена, и исключение ушло бы в CancellationTokenSource.Cancel.
+            }
         }
     }
 
@@ -316,9 +378,13 @@ public sealed class UciEngine : IDisposable
 
     // --------------------------------------------------------------- Поиск
 
-    /// <summary>Запускает поиск и ждёт bestmove. Одновременно выполняется только один поиск.</summary>
+    /// <summary>
+    /// Запускает поиск и ждёт bestmove. Одновременно выполняется только один поиск.
+    /// <paramref name="onStarted"/> получает номер поиска (как и события, через SynchronizationContext)
+    /// раньше любой его строки info — по нему интерфейс отличает свои строки от запоздавших чужих.
+    /// </summary>
     public async Task<SearchResult> GoAsync(string fen, IEnumerable<string>? moves, SearchLimits limits,
-        CancellationToken ct = default)
+        CancellationToken ct = default, Action<long>? onStarted = null)
     {
         ThrowIfWedged();
         if (!IsRunning) throw new InvalidOperationException("Движок не запущен.");
@@ -326,19 +392,23 @@ public sealed class UciEngine : IDisposable
         using var lease = await AcquireAsync(ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
 
-        var state = new SearchState();
+        var state = new SearchState(Interlocked.Increment(ref _searchCounter));
         lock (_gate) _search = state;
-
-        using var registration = ct.Register(() =>
-        {
-            state.StopRequested = true;
-            Send("stop");
-        });
+        // До go: строки info этого поиска встанут в очередь уже после уведомления.
+        if (onStarted != null) Post(() => onStarted(state.Id));
 
         SetPosition(fen, moves);
         Send(limits.ToGoCommand());
         if (limits.MoveTimeMs is { } movetime)
             state.DeadlineTicks = Environment.TickCount64 + movetime + (long)MoveTimeMargin.TotalMilliseconds;
+
+        // Только после go: отмена, пришедшая раньше, отправила бы stop в пустоту, и поиск
+        // шёл бы дальше как ни в чём не бывало. Уже отменённый токен сработает прямо здесь.
+        using var registration = ct.Register(() =>
+        {
+            state.MarkStopSent();
+            Send("stop");
+        });
 
         return await WatchSearchAsync(state).ConfigureAwait(false);
     }
@@ -350,6 +420,7 @@ public sealed class UciEngine : IDisposable
     /// </summary>
     private async Task<SearchResult> WatchSearchAsync(SearchState state)
     {
+        var stopTimeoutMs = (long)StopTimeout.TotalMilliseconds;
         while (true)
         {
             var silenceAt = state.LastOutputTicks + (long)SilenceTimeout.TotalMilliseconds;
@@ -366,14 +437,22 @@ public sealed class UciEngine : IDisposable
 
             if (state.DeadlineTicks is { } hard && now >= hard)
             {
-                if (state.StopRequested)
-                    return await FailSearchAsync(state, "движок не остановился после истечения времени на ход")
-                        .ConfigureAwait(false);
+                // stop мог послать и кто-то другой (отмена, StopSearchAsync) — тогда срок ответа
+                // считаем от его отправки, а не объявляем движок зависшим сразу.
+                var stopSent = state.StopSentTicks;
+                if (stopSent != 0)
+                {
+                    if (now - stopSent >= stopTimeoutMs)
+                        return await FailSearchAsync(state, "движок не остановился после истечения времени на ход")
+                            .ConfigureAwait(false);
+                    state.DeadlineTicks = stopSent + stopTimeoutMs;
+                    continue;
+                }
 
                 // Движок жив (строки идут), но просрочил movetime — просим остановиться.
-                state.StopRequested = true;
+                state.MarkStopSent();
                 Send("stop");
-                state.DeadlineTicks = now + (long)StopTimeout.TotalMilliseconds;
+                state.DeadlineTicks = now + stopTimeoutMs;
             }
         }
     }
@@ -402,7 +481,7 @@ public sealed class UciEngine : IDisposable
             return;
         }
 
-        state.StopRequested = true;
+        state.MarkStopSent();
         Send("stop");
         if (await WaitOrTimeoutAsync(state.Tcs.Task, StopTimeout).ConfigureAwait(false))
         {
@@ -451,18 +530,26 @@ public sealed class UciEngine : IDisposable
     private async Task ReadyHandshakeAsync(CancellationToken ct)
     {
         if (!IsRunning) return;
-        _readyTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            // Ждём ответ именно на этот isready: readyok от прошлого рукопожатия, брошенного
+            // по отмене, иначе закрыл бы наше раньше времени.
+            // Send считает каждый ушедший isready, так что наш будет следующим по номеру.
+            _readyTcs = tcs;
+            _readyAwaited = _readySent + 1;
+        }
         Send("isready");
-        if (!await WaitOrTimeoutAsync(_readyTcs.Task, ReadyTimeout, ct).ConfigureAwait(false))
+        if (!await WaitOrTimeoutAsync(tcs.Task, ReadyTimeout, ct).ConfigureAwait(false))
         {
             var reason = $"движок не ответил на isready за {ReadyTimeout.TotalSeconds:0} с";
             MarkWedged(reason);
             // Обычно MarkWedged роняет наше ожидание с этой же причиной. Но если зависание
             // объявили раньше нас, ронять уже нечего — тогда называем причину сами, иначе
             // остались бы ждать ответа, которого не будет.
-            if (!_readyTcs.Task.IsCompleted) throw new EngineUnresponsiveException(reason);
+            if (!tcs.Task.IsCompleted) throw new EngineUnresponsiveException(reason);
         }
-        await _readyTcs.Task.ConfigureAwait(false);
+        await tcs.Task.ConfigureAwait(false);
     }
 
     /// <summary>true — задача успела, false — истёк срок. Отмена по токену бросает исключение.</summary>
@@ -490,6 +577,7 @@ public sealed class UciEngine : IDisposable
             if (line.StartsWith("info string", StringComparison.Ordinal)) return;
             var info = ParseInfo(line);
             if (info == null) return;
+            info.SearchId = current?.Id ?? 0;
 
             if (current != null && !current.Completed && info.Pv.Length > 0) current.Result.Lines[info.MultiPv] = info;
 
@@ -535,7 +623,17 @@ public sealed class UciEngine : IDisposable
         }
 
         if (line.StartsWith("uciok", StringComparison.Ordinal)) _uciOkTcs?.TrySetResult(true);
-        else if (line.StartsWith("readyok", StringComparison.Ordinal)) _readyTcs?.TrySetResult(true);
+        else if (line.StartsWith("readyok", StringComparison.Ordinal))
+        {
+            TaskCompletionSource<bool>? ready = null;
+            lock (_gate)
+            {
+                // readyok приходят строго по порядку isready: считаем их и закрываем ожидание,
+                // только когда пришёл ответ на последний отправленный.
+                if (++_readyAnswered >= _readyAwaited) ready = _readyTcs;
+            }
+            ready?.TrySetResult(true);
+        }
     }
 
     private static EngineInfo? ParseInfo(string line)
@@ -677,7 +775,8 @@ public sealed class UciEngine : IDisposable
         if (_disposed) return;
         _disposed = true;
         Stop(graceful: !IsWedged);
-        _turnstile.Dispose();
-        _owner.Dispose();
+        // Семафоры намеренно не освобождаем: Dispose не будит тех, кто уже ждёт в WaitAsync,
+        // и они повисли бы навсегда. Неуправляемых ресурсов у них нет (AvailableWaitHandle не
+        // используется), а проснувшийся ожидающий увидит остановленный движок и бросит исключение.
     }
 }

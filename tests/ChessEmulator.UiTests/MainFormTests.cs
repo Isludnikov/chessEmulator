@@ -84,4 +84,30 @@ public class MainFormTests
             Assert.False(box.Enabled, "в редакторе уровень заперт");
         });
     }
+
+    [WinFormsFact(DisplayName = "Главное окно: ход человека не встаёт, пока движок ищет свой")]
+    public void ХодЧеловекаПокаДвижокДумает()
+    {
+        WithSettingsFile(() =>
+        {
+            using var form = new MainForm();
+            const System.Reflection.BindingFlags flags =
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var game = (Chess.Game)typeof(MainForm).GetField("_game", flags)!.GetValue(form)!;
+            var applyUserMove = typeof(MainForm).GetMethod("ApplyUserMove", flags)!;
+
+            var e4 = game.CurrentPosition.LegalMoves.First(m => m.ToUci() == "e2e4");
+            var d4 = game.CurrentPosition.LegalMoves.First(m => m.ToUci() == "d2d4");
+
+            // Двойной щелчок по строке анализа ведёт сюда в обход запертой доски: ход встал бы
+            // в позицию, для которой движок уже ищет свой.
+            typeof(MainForm).GetField("_engineBusyWithMove", flags)!.SetValue(form, true);
+            applyUserMove.Invoke(form, new object[] { e4 });
+            Assert.True(game.Current.IsRoot, "пока движок думает, ход не принят");
+
+            typeof(MainForm).GetField("_engineBusyWithMove", flags)!.SetValue(form, false);
+            applyUserMove.Invoke(form, new object[] { d4 });
+            Assert.Equal("d2d4", game.Current.Move.ToUci());  // свободный движок ход пропускает
+        });
+    }
 }

@@ -70,7 +70,20 @@ public sealed class MainForm : Form
 
     private readonly Dictionary<int, EngineInfo> _lines = new();
     private int _analysisGeneration;
+
+    /// <summary>Номер поиска текущего анализа; строки info остальных поисков не показываем. 0 — никакого.</summary>
+    private long _analysisSearchId;
+
     private bool _engineBusyWithMove;
+
+    /// <summary>
+    /// Номер хода движка. Флаг занятости сбрасывает только владелец текущего номера: иначе
+    /// ход, прерванный перезапуском движка, погасил бы флаг уже следующего хода.
+    /// </summary>
+    private int _engineMoveSeq;
+
+    /// <summary>Номер запуска движка: запоздавший запуск, который обогнал более новый, молча выходит.</summary>
+    private int _engineStartGeneration;
     private CancellationTokenSource? _gameAnalysisCts;
     private bool _suppressCommentEvents;
     private readonly UciLog _uciLog = new();
@@ -718,6 +731,9 @@ public sealed class MainForm : Form
     private void ApplyUserMove(Chess.Move move)
     {
         if (_editing) return;
+        // Доска в это время заблокирована, но сюда ведёт и двойной щелчок по строке анализа:
+        // ход человека встал бы в позицию, для которой движок уже ищет свой.
+        if (_engineBusyWithMove || _gameAnalysisCts != null) return;
         _game.AddMove(move);
 
         // Если движок сейчас ответит, бесконечный анализ запускать незачем: его пришлось бы
@@ -745,15 +761,16 @@ public sealed class MainForm : Form
 
     private async Task ResetEngineForNewGameAsync()
     {
-        if (!_engine.IsRunning) return;
+        var engine = _engine;
+        if (!engine.IsRunning) return;
         _analysisGeneration++;
         try
         {
-            await _engine.NewGameAsync();
+            await engine.NewGameAsync();
         }
         catch (EngineUnresponsiveException ex)
         {
-            await HandleEngineWedgedAsync(ex.Message);
+            await HandleEngineWedgedAsync(engine, ex.Message);
         }
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or OperationCanceledException)
         {
@@ -831,6 +848,8 @@ public sealed class MainForm : Form
 
             var game = games.Count == 1 ? games[0] : ChooseGame(games);
             if (game == null) return null;
+            // Открытую партию показываем на последнем ходе, а не в начальной расстановке.
+            game.GoToEnd();
 
             _settings.LastPgnDirectory = Path.GetDirectoryName(path);
             _settings.Save();
@@ -921,6 +940,7 @@ public sealed class MainForm : Form
         try
         {
             game = Pgn.Read(text);
+            game.GoToEnd();
         }
         catch (Exception ex)
         {
@@ -1095,6 +1115,8 @@ public sealed class MainForm : Form
     /// </summary>
     private void ResetEngineOutput()
     {
+        // Всё, что ещё придёт от прежнего поиска, относится к прежней позиции.
+        _analysisSearchId = 0;
         _lines.Clear();
         _linesView.Items.Clear();
         _board.ClearArrows();
@@ -1198,37 +1220,56 @@ public sealed class MainForm : Form
 
     private async Task StartEngineAsync(string path)
     {
+        // Запусков может быть несколько внахлёст (кнопка, настройки, авто-перезапуск):
+        // выигрывает последний, остальные молча выходят после ближайшего await.
+        var startGeneration = ++_engineStartGeneration;
+        var engine = new UciEngine();
+        bool Superseded() => startGeneration != _engineStartGeneration;
+
         try
         {
             _engineStatus.Text = "Движок: запуск…";
             _uciLog.Add("* запуск движка: " + path);
             _engine.Dispose();
-            _engine = new UciEngine();
-            _engine.LogReceived += _uciLog.Append;
-            _engine.InfoReceived += OnEngineInfo;
-            _engine.Exited += (_, _) =>
+            _engine = engine;
+            engine.LogReceived += _uciLog.Append;
+            engine.InfoReceived += OnEngineInfo;
+            // События прежнего движка, вставшие в очередь до его закрытия, к текущему не относятся.
+            engine.Exited += (sender, _) =>
             {
+                if (!ReferenceEquals(sender, _engine)) return;
                 _engineStatus.Text = "Движок: завершился";
                 UpdateEngineControlsEnabled();
             };
-            _engine.Unresponsive += (_, reason) => _ = HandleEngineWedgedAsync(reason);
+            engine.Unresponsive += (sender, reason) =>
+            {
+                if (sender is UciEngine source) _ = HandleEngineWedgedAsync(source, reason);
+            };
 
-            await _engine.StartAsync(path);
-            await ApplyEngineOptionsAsync();
-            await _engine.NewGameAsync();
+            await engine.StartAsync(path);
+            if (Superseded()) return;
+            await ApplyEngineOptionsAsync(engine);
+            if (Superseded()) return;
+            await engine.NewGameAsync();
+            if (Superseded()) return;
 
             _settings.EnginePath = path;
             _settings.Save();
 
-            _engineStatus.Text = $"Движок: {_engine.Name}";
+            _engineStatus.Text = $"Движок: {engine.Name}";
             // Имя движка уже видно в строке состояния, поэтому при выключенных подсказках
             // панель объясняет, почему она пуста, а не повторяет его.
-            _adviceBox.Text = _settings.ShowEngineHints ? $"{_engine.Name} готов к работе." : HintsOffText;
+            _adviceBox.Text = _settings.ShowEngineHints ? $"{engine.Name} готов к работе." : HintsOffText;
             UpdateEngineControlsEnabled();
-            await RefreshAnalysisAsync();
+
+            // Движок могли поднять как раз в его очередь ходить — например, перезапуском после
+            // зависания посреди хода соперника. Без этого партия так и стояла бы.
+            if (EngineShouldMove()) await MaybeLetEngineMoveAsync();
+            else await RefreshAnalysisAsync();
         }
         catch (Exception ex)
         {
+            if (Superseded()) return;
             _engineStatus.Text = "Движок: ошибка запуска";
             _adviceBox.Text = "Не удалось запустить движок: " + ex.Message;
             UpdateEngineControlsEnabled();
@@ -1240,7 +1281,7 @@ public sealed class MainForm : Form
     /// Сила тут всегда полная: ослабление живёт ровно один ход соперника, чтобы шкала оценки,
     /// стрелки, подсказки и разбор партии не врали вслед за выбранным уровнем.
     /// </summary>
-    private async Task ApplyEngineOptionsAsync()
+    private async Task ApplyEngineOptionsAsync(UciEngine engine)
     {
         var options = new List<KeyValuePair<string, string>>
         {
@@ -1249,7 +1290,7 @@ public sealed class MainForm : Form
         };
         options.AddRange(Difficulty.FullStrengthOptions(_settings.MultiPv));
 
-        await _engine.ApplyOptionsAsync(options);
+        await engine.ApplyOptionsAsync(options);
     }
 
     /// <summary>Сложность соперника с подставленными ручными настройками диалога.</summary>
@@ -1263,11 +1304,11 @@ public sealed class MainForm : Form
     /// в Stockfish есть обработчик изменения — хеш пересоздаёт и чистит таблицу перестановок,
     /// потоки пересоздают пул. Дважды на каждый ход это заметная просадка.
     /// </summary>
-    private async Task RestoreFullStrengthAsync()
+    private async Task RestoreFullStrengthAsync(UciEngine engine)
     {
         try
         {
-            await _engine.ApplyOptionsAsync(Difficulty.FullStrengthOptions(_settings.MultiPv));
+            await engine.ApplyOptionsAsync(Difficulty.FullStrengthOptions(_settings.MultiPv));
         }
         catch (Exception ex) when (ex is EngineUnresponsiveException or InvalidOperationException
                                        or TimeoutException or OperationCanceledException)
@@ -1282,8 +1323,11 @@ public sealed class MainForm : Form
     /// Ход соперника ищется ослабленным движком, но ослабление живёт ровно один поиск:
     /// полная сила возвращается до того, как ход попадёт на доску и запустится анализ.
     /// </summary>
-    private async Task<SearchResult> SearchOpponentMoveAsync(DifficultyProfile profile)
+    private async Task<SearchResult> SearchOpponentMoveAsync(UciEngine engine, DifficultyProfile profile,
+        string fen, IReadOnlyList<string> moves)
     {
+        // Движок и позиция приходят параметрами: за время ожиданий поле _engine могут подменить
+        // перезапуском, а партию — навигацией. Силу возвращаем тому движку, который ослабили.
         var weakened = false;
         try
         {
@@ -1291,8 +1335,8 @@ public sealed class MainForm : Form
             {
                 // ApplyOptionsAsync сам гасит текущий поиск и дожидается bestmove:
                 // setoption во время поиска настоящий Stockfish не переживает.
-                await _engine.ApplyOptionsAsync(
-                    Difficulty.OpponentOptions(profile, _engine.FindOption("UCI_Elo")));
+                await engine.ApplyOptionsAsync(
+                    Difficulty.OpponentOptions(profile, engine.FindOption("UCI_Elo")));
                 weakened = true;
             }
 
@@ -1303,11 +1347,11 @@ public sealed class MainForm : Form
                 MoveTimeMs = profile.MoveTimeMs,
                 Depth = profile.DepthLimit > 0 ? profile.DepthLimit : null
             };
-            return await _engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(), limits);
+            return await engine.GoAsync(fen, moves, limits);
         }
         finally
         {
-            if (weakened) await RestoreFullStrengthAsync();
+            if (weakened) await RestoreFullStrengthAsync(engine);
         }
     }
 
@@ -1315,14 +1359,18 @@ public sealed class MainForm : Form
     /// Движок перестал отвечать: процесс уже снят обёрткой, поднимаем его заново.
     /// Повторный отказ в течение полуминуты не перезапускаем — иначе получится карусель.
     /// </summary>
-    private async Task HandleEngineWedgedAsync(string reason)
+    private async Task HandleEngineWedgedAsync(UciEngine engine, string reason)
     {
-        if (_restartingEngine) return;
+        // О зависании узнают двое: событие Unresponsive и операция, которая упала. Перезапуск
+        // нужен один — второй, пришедший после подмены движка, счёл бы отказ повторным.
+        if (_restartingEngine || !ReferenceEquals(engine, _engine)) return;
 
         _uciLog.Add("* движок не отвечает: " + reason);
         SaveHangReport(reason);
 
         _engineStatus.Text = "Движок: не отвечает";
+        // Ход, который ждал этот движок, уже не придёт: отбираем у него флаг занятости.
+        _engineMoveSeq++;
         _engineBusyWithMove = false;
         UpdateEngineControlsEnabled();
         _board.InteractionEnabled = !_editing && _game.CurrentPosition.LegalMoves.Count > 0;
@@ -1408,6 +1456,17 @@ public sealed class MainForm : Form
 
     private async Task ShowEngineSettingsAsync()
     {
+        // Новые параметры ушли бы движку между ослаблением и ходом соперника (и он сыграл бы
+        // в полную силу) или оборвали бы разбор партии на полуслове.
+        if (_engineBusyWithMove || _gameAnalysisCts != null)
+        {
+            MessageBox.Show(this, _engineBusyWithMove
+                    ? "Движок сейчас обдумывает ход. Откройте настройки, когда он походит."
+                    : "Идёт разбор партии. Дождитесь его окончания или прервите разбор.",
+                "Настройки движка", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
         var previousPath = _settings.EnginePath;
         using var dialog = new EngineSettingsForm(_settings);
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
@@ -1421,13 +1480,14 @@ public sealed class MainForm : Form
         {
             // ApplyOptionsAsync сам дождётся окончания поиска: setoption во время поиска
             // настоящий Stockfish не переживает.
+            var engine = _engine;
             try
             {
-                await ApplyEngineOptionsAsync();
+                await ApplyEngineOptionsAsync(engine);
             }
             catch (EngineUnresponsiveException ex)
             {
-                await HandleEngineWedgedAsync(ex.Message);
+                await HandleEngineWedgedAsync(engine, ex.Message);
                 return;
             }
             await RefreshAnalysisAsync();
@@ -1491,10 +1551,18 @@ public sealed class MainForm : Form
     private async Task RefreshAnalysisAsync()
     {
         var generation = ++_analysisGeneration;
+        _analysisSearchId = 0;
 
-        if (!_engine.IsRunning) return;
-        await _engine.StopSearchAsync();
-        if (generation != _analysisGeneration) return;
+        var engine = _engine;
+        if (!engine.IsRunning) return;
+
+        // Ход соперника, подсказка и разбор партии — чужие поиски: stop оборвал бы их на полуслове,
+        // и соперник ответил бы мгновенным слабым ходом, а разбор записал бы заниженные оценки.
+        // Анализ вернётся сам, когда они закончатся.
+        if (_engineBusyWithMove || _gameAnalysisCts != null) return;
+
+        await engine.StopSearchAsync();
+        if (generation != _analysisGeneration || !ReferenceEquals(engine, _engine)) return;
 
         if (_editing)
         {
@@ -1502,7 +1570,10 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (!_settings.AnalysisRuns || _engineBusyWithMove || _gameAnalysisCts != null)
+        // Пока ждали stop, мог начаться ход движка или разбор: их строку состояния не трогаем.
+        if (_engineBusyWithMove || _gameAnalysisCts != null) return;
+
+        if (!_settings.AnalysisRuns)
         {
             _searchStatus.Text = string.Empty;
             return;
@@ -1523,7 +1594,12 @@ public sealed class MainForm : Form
 
         try
         {
-            await _engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(), limits);
+            await engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(), limits,
+                onStarted: id =>
+                {
+                    // Номер приходит через очередь: к этому времени анализ мог уже смениться.
+                    if (generation == _analysisGeneration) _analysisSearchId = id;
+                });
         }
         catch (EngineUnresponsiveException)
         {
@@ -1537,6 +1613,10 @@ public sealed class MainForm : Form
 
     private void OnEngineInfo(object? sender, EngineInfo info)
     {
+        if (!ReferenceEquals(sender, _engine)) return;
+        // Только строки текущего анализа: запоздавшие строки прошлой позиции часто проходят
+        // проверку легальности (та же сторона на ходу) и показали бы чужую оценку.
+        if (_analysisSearchId == 0 || info.SearchId != _analysisSearchId) return;
         if (!_settings.ShowEngineHints || _gameAnalysisCts != null || _engineBusyWithMove || _editing) return;
         if (info.Pv.Length == 0) return;
 
@@ -1716,27 +1796,51 @@ public sealed class MainForm : Form
         if (_engineBusyWithMove || _gameAnalysisCts != null) return;
         if (_game.CurrentPosition.LegalMoves.Count == 0) return;
 
+        // Всё, о чём спрашиваем движок, фиксируем до первого await: пока он думает, партию могут
+        // пролистать или заменить, а сам движок — перезапустить.
+        var engine = _engine;
+        var game = _game;
+        var node = game.Current;
+        var fen = game.StartFen;
+        var moves = game.UciMovesToCurrent();
+        var moveSeq = ++_engineMoveSeq;
+
         _engineBusyWithMove = true;
         UpdateEngineControlsEnabled();
         _board.InteractionEnabled = false;
         _searchStatus.Text = "Движок думает…";
 
+        // Ход поставлен на доску: анализ новой позиции тогда уже запустил RefreshAll.
+        var applied = false;
+
+        // Ответ относится к позиции, которая всё ещё на доске, а ход — всё ещё наш.
+        bool StillCurrent() =>
+            moveSeq == _engineMoveSeq && !_editing
+            && ReferenceEquals(_game, game) && ReferenceEquals(game.Current, node);
+
         try
         {
             _analysisGeneration++;
-            await _engine.StopSearchAsync();
+            _analysisSearchId = 0;
+            await engine.StopSearchAsync();
 
             var profile = asOpponent ? CurrentDifficulty() : Difficulty.For(DifficultyLevel.Maximum);
             var started = Environment.TickCount64;
 
             var result = asOpponent
-                ? await SearchOpponentMoveAsync(profile)
-                : await _engine.GoAsync(_game.StartFen, _game.UciMovesToCurrent(),
-                    SearchLimits.ByTime(_settings.EngineMoveTimeMs));
+                ? await SearchOpponentMoveAsync(engine, profile, fen, moves)
+                : await engine.GoAsync(fen, moves, SearchLimits.ByTime(_settings.EngineMoveTimeMs));
             // Дальше движок снова на полной силе: возврат сделан внутри SearchOpponentMoveAsync,
             // до того как ход попадёт на доску и RefreshAll запустит бесконечный анализ.
 
-            var choice = OpponentMovePicker.Pick(result, _game.CurrentPosition, profile, _random);
+            if (!StillCurrent())
+            {
+                if (moveSeq == _engineMoveSeq) _searchStatus.Text = "Позиция изменилась — ход движка отменён.";
+                return;
+            }
+
+            var position = node.Position;
+            var choice = OpponentMovePicker.Pick(result, position, profile, _random);
             if (!choice.Found)
             {
                 _searchStatus.Text = "Движок не предложил ход.";
@@ -1751,13 +1855,19 @@ public sealed class MainForm : Form
             {
                 var left = profile.MinThinkMs - (int)(Environment.TickCount64 - started);
                 if (left > 0) await Task.Delay(left);
+                if (!StillCurrent())
+                {
+                    if (moveSeq == _engineMoveSeq) _searchStatus.Text = "Позиция изменилась — ход движка отменён.";
+                    return;
+                }
             }
 
             if (applyToBoard)
             {
-                var san = _game.CurrentPosition.ToSan(move);
+                var san = position.ToSan(move);
                 _engineBusyWithMove = false;
-                _game.AddMove(move);
+                game.AddMove(move);
+                applied = true;
                 RefreshAll();
                 // После RefreshAll: он сбрасывает ячейку вместе с остальным выводом движка.
                 if (asOpponent) _opponentStatus.Text = OpponentMoveText(profile, choice, san);
@@ -1767,30 +1877,38 @@ public sealed class MainForm : Form
             {
                 var color = Color.FromArgb(210, 230, 160, 70);
                 _board.SetArrows(new[] { new BoardArrow(move.From, move.To, color) });
-                _adviceBox.Text = $"Подсказка: {_game.CurrentPosition.ToSan(move)}" +
+                _adviceBox.Text = $"Подсказка: {position.ToSan(move)}" +
                                   (result.Best != null
-                                      ? $" (оценка {result.Best.ScoreText(_game.CurrentPosition.SideToMove == PieceColor.White)})"
+                                      ? $" (оценка {result.Best.ScoreText(position.SideToMove == PieceColor.White)})"
                                       : string.Empty);
             }
         }
         catch (EngineUnresponsiveException ex)
         {
-            _searchStatus.Text = "Движок не отвечает — перезапуск…";
-            _engineBusyWithMove = false;
-            UpdateEngineControlsEnabled();
-            await HandleEngineWedgedAsync(ex.Message);
+            if (moveSeq == _engineMoveSeq)
+            {
+                _searchStatus.Text = "Движок не отвечает — перезапуск…";
+                _engineBusyWithMove = false;
+                UpdateEngineControlsEnabled();
+            }
+            await HandleEngineWedgedAsync(engine, ex.Message);
             return;
         }
         catch (Exception ex)
         {
-            _searchStatus.Text = "Ошибка движка: " + ex.Message;
+            if (moveSeq == _engineMoveSeq) _searchStatus.Text = "Ошибка движка: " + ex.Message;
         }
         finally
         {
-            _engineBusyWithMove = false;
-            UpdateEngineControlsEnabled();
-            _board.InteractionEnabled = !_editing && _game.CurrentPosition.LegalMoves.Count > 0;
-            if (!applyToBoard) await RefreshAnalysisAsync();
+            // Если за это время начался другой ход (например, после перезапуска движка),
+            // флаг и доска принадлежат ему.
+            if (moveSeq == _engineMoveSeq)
+            {
+                _engineBusyWithMove = false;
+                UpdateEngineControlsEnabled();
+                _board.InteractionEnabled = !_editing && _game.CurrentPosition.LegalMoves.Count > 0;
+                if (!applied) await RefreshAnalysisAsync();
+            }
         }
     }
 
@@ -1843,11 +1961,13 @@ public sealed class MainForm : Form
             return;
         }
 
-        _analysisGeneration++;
-        await _engine.StopSearchAsync();
-
-        _gameAnalysisCts = new CancellationTokenSource();
-        var token = _gameAnalysisCts.Token;
+        // Разбор объявляем занятым до первого await: иначе за время остановки анализа успели бы
+        // стартовать второй разбор (повторный клик) или ход соперника ослабленным движком.
+        var cts = new CancellationTokenSource();
+        _gameAnalysisCts = cts;
+        var token = cts.Token;
+        var engine = _engine;
+        var startFen = _game.StartFen;
 
         var nodes = new List<MoveNode> { _game.Root };
         nodes.AddRange(line);
@@ -1861,6 +1981,10 @@ public sealed class MainForm : Form
 
         try
         {
+            _analysisGeneration++;
+            _analysisSearchId = 0;
+            await engine.StopSearchAsync();
+
             var movesSoFar = new List<string>();
             for (var i = 0; i < nodes.Count; i++)
             {
@@ -1878,7 +2002,7 @@ public sealed class MainForm : Form
                 }
                 else
                 {
-                    var result = await _engine.GoAsync(_game.StartFen, movesSoFar.ToList(),
+                    var result = await engine.GoAsync(startFen, movesSoFar.ToList(),
                         SearchLimits.ByTime(_settings.GameAnalysisMoveTimeMs), token);
 
                     var info = result.Best;
@@ -1909,8 +2033,8 @@ public sealed class MainForm : Form
         }
         finally
         {
-            _gameAnalysisCts?.Dispose();
-            _gameAnalysisCts = null;
+            if (ReferenceEquals(_gameAnalysisCts, cts)) _gameAnalysisCts = null;
+            cts.Dispose();
             _progress.Visible = false;
             UpdateEngineControlsEnabled();
             _board.InteractionEnabled = !_editing && _game.CurrentPosition.LegalMoves.Count > 0;

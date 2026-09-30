@@ -19,6 +19,12 @@ public sealed class EngineInfo
     public int TbHits { get; set; }
     public string[] Pv { get; set; } = Array.Empty<string>();
 
+    /// <summary>
+    /// Номер поиска, во время которого пришла строка (0 — вне поиска). Строки доходят до
+    /// интерфейса через очередь и могут прийти, когда он уже показывает другую позицию.
+    /// </summary>
+    public long SearchId { get; set; }
+
     /// <summary>Оценка с точки зрения белых (движок отдаёт её от лица стороны, которая ходит).</summary>
     public int? WhiteCp(bool whiteToMove) => ScoreCp is null ? null : whiteToMove ? ScoreCp : -ScoreCp;
 
