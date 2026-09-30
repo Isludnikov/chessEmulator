@@ -71,7 +71,8 @@ public class MoveListViewTests
         Assert.True(variationView.AutoScrollMinSize.Height > view.AutoScrollMinSize.Height, "вариант занимает больше места");
         Assert.True(UiHarness.InkFraction(variationImage, background) > 0.01, "вариант виден");
 
-        Assert.Null(Record.Exception(() => variationView.ScrollToCurrent()));  // прокрутка к текущему ходу не падает
+        // ReSharper disable once AccessToDisposedClosure
+        Assert.Null(Record.Exception(variationView.ScrollToCurrent));  // прокрутка к текущему ходу не падает
         // узкая панель раскладывается
         Assert.Null(Record.Exception(() =>
         {
@@ -166,6 +167,7 @@ public class MoveListViewTests
         // Номера ходов не выбираются — только сами ходы
         Assert.True(hits.All(san => game.MainLine().Any(n => n.San == san)), "выбранные узлы — ходы основной линии");
 
+        // ReSharper disable once AccessToDisposedClosure
         Assert.Null(Record.Exception(() => UiHarness.MouseMove(view, new Point(40, 14))));  // движение мыши не падает
         // щелчок без партии не падает
         Assert.Null(Record.Exception(() =>
@@ -174,5 +176,32 @@ public class MoveListViewTests
             UiHarness.Render(emptyView).Dispose();
             UiHarness.MouseDown(emptyView, new Point(20, 20));
         }));
+    }
+
+    [WinFormsFact(DisplayName = "Запись партии: ход под курсором подсвечен")]
+    public void Hover()
+    {
+        var game = SampleGame();
+        using var view = new MoveListView { ClientSize = new Size(320, 400), Game = game };
+        Assert.Same(game, view.Game);
+        using var plain = UiHarness.Render(view);
+
+        // В этой точке стоит первый ход партии (см. RightClickDoesNotSelect), а текущий — последний.
+        var point = new Point(30, 12);
+        UiHarness.MouseMove(view, point, MouseButtons.None);
+        using var hovered = UiHarness.Render(view);
+        Assert.True(UiHarness.Difference(plain, hovered) > 50, "ход под курсором подсвечен");
+
+        UiHarness.MouseLeave(view);
+        using var left = UiHarness.Render(view);
+        Assert.Equal(0, UiHarness.Difference(plain, left));  // курсор ушёл — подсветка погасла
+
+        // Текущий ход выделен и без курсора: наведение его не перекрашивает.
+        game.GoTo(game.MainLine()[0]);
+        view.Reload();
+        using var current = UiHarness.Render(view);
+        UiHarness.MouseMove(view, point, MouseButtons.None);
+        using var hoveredCurrent = UiHarness.Render(view);
+        Assert.Equal(0, UiHarness.Difference(current, hoveredCurrent));
     }
 }

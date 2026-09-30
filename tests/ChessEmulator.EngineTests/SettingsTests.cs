@@ -88,7 +88,7 @@ public class SettingsTests(ITestOutputHelper output)
         // Испорченный файл не должен ронять приложение: Load ловит ошибку разбора
         // мусор вместо JSON не разбирается
         Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<AppSettings>("{это не json"));
-        Assert.Null(Record.Exception(() => AppSettings.Load()));  // чтение настроек не падает
+        Assert.Null(Record.Exception(AppSettings.Load));  // чтение настроек не падает
         Assert.True(AppSettings.Load() != null, "чтение настроек возвращает объект");
     }
 
@@ -217,6 +217,9 @@ public class SettingsTests(ITestOutputHelper output)
         Directory.CreateDirectory(dir);
         var exe = Path.Combine(dir, "stockfish-windows-x86-64-avx2.exe");
         File.WriteAllText(exe, string.Empty);
+        // Сборка с именем не из списка известных: её находит шаблон stockfish*.exe.
+        var custom = Path.Combine(dir, "stockfish-17-своя-сборка.exe");
+        File.WriteAllText(custom, string.Empty);
 
         var previousPath = Environment.GetEnvironmentVariable("PATH");
         try
@@ -226,6 +229,7 @@ public class SettingsTests(ITestOutputHelper output)
 
             var found = EngineLocator.FindAll();
             Assert.Contains(exe, found, StringComparer.OrdinalIgnoreCase);  // файл найден
+            Assert.Contains(custom, found, StringComparer.OrdinalIgnoreCase);  // и файл с нестандартным именем
             // повторов нет даже при совпадении двух механизмов поиска
             Assert.Equal(found.Count, found.Distinct(StringComparer.OrdinalIgnoreCase).Count());
         }
@@ -239,7 +243,7 @@ public class SettingsTests(ITestOutputHelper output)
     [Fact(DisplayName = "Поиск движка")]
     public void Locator()
     {
-        List<string> found = new();
+        List<string> found = [];
         Assert.Null(Record.Exception(() => found = EngineLocator.FindAll()));  // поиск не падает
 
         Assert.True(found.All(File.Exists), "все найденные файлы существуют");

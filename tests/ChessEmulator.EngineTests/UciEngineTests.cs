@@ -12,7 +12,7 @@ namespace ChessEmulator.EngineTests;
 public sealed class UciEngineTests : IAsyncLifetime
 {
     private readonly UciEngine _engine = new();
-    private readonly List<string> _sent = new();
+    private readonly List<string> _sent = [];
     private int _infoCount;
 
     /// <summary>
@@ -90,14 +90,14 @@ public sealed class UciEngineTests : IAsyncLifetime
         _engine.SetPosition(Position.StartFen);
         Assert.Equal("position startpos", Last());  // начальная позиция передаётся коротко
 
-        _engine.SetPosition(Position.StartFen, new[] { "e2e4", "e7e5" });
+        _engine.SetPosition(Position.StartFen, ["e2e4", "e7e5"]);
         Assert.Equal("position startpos moves e2e4 e7e5", Last());  // начальная позиция с ходами
 
         const string fen = "4k3/8/8/8/8/8/8/4K3 w - - 0 1";
         _engine.SetPosition(fen);
         Assert.Equal($"position fen {fen}", Last());  // произвольная позиция
 
-        _engine.SetPosition(fen, Array.Empty<string>());
+        _engine.SetPosition(fen, []);
         Assert.Equal($"position fen {fen}", Last());  // пустой список ходов не добавляется
 
         Clear();
@@ -221,10 +221,117 @@ public sealed class UciEngineTests : IAsyncLifetime
         Assert.Equal("e2e4", next.BestMove);  // следующий поиск в порядке
     }
 
+    [Fact(DisplayName = "UCI: оборванные строки анализа")]
+    public async Task ОборванныеСтроки()
+    {
+        var infos = new List<EngineInfo>();
+        _engine.InfoReceived += (_, info) => infos.Add(info);
+
+        _engine.Send("test-scenario truncated");
+        var result = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(6),
+            TestContext.Current.CancellationToken);
+        _engine.Send("test-scenario default");
+
+        // Строка без единого знакомого поля событием не становится.
+        Assert.Equal(13, infos.Count);
+        var byDepth = infos.ToDictionary(i => i.Depth);
+
+        // Ключевое слово без значения пропускается, а разобранное до него остаётся.
+        Assert.Equal(11, byDepth[7].ScoreCp);  // оценка перед оборванным seldepth
+        Assert.Equal(0, byDepth[7].SelDepth);  // выборочной глубины нет
+        Assert.Equal(1, byDepth[8].MultiPv);  // номер варианта остался первым
+        Assert.Equal(0, byDepth[9].Nodes);  // узлов нет
+        Assert.Equal(0, byDepth[10].Nps);  // скорости нет
+        Assert.Equal(0, byDepth[11].TimeMs);  // времени нет
+        Assert.Equal(0, byDepth[12].HashFull);  // заполнения хеша нет
+        Assert.Equal(0, byDepth[13].TbHits);  // попаданий в таблицы нет
+
+        // Оборванная оценка — это «оценки нет», как и нечисловая.
+        Assert.Null(byDepth[14].ScoreCp);  // «score cp» без числа
+        Assert.Null(byDepth[15].ScoreMate);  // «score mate» без числа
+        Assert.Null(byDepth[16].ScoreCp);  // «score» без вида оценки
+        Assert.Null(byDepth[16].ScoreMate);
+        Assert.Equal("—", byDepth[16].ScoreText(true));
+
+        Assert.Empty(byDepth[17].Pv);  // «pv» без ходов — пустой вариант
+        Assert.Equal(19, byDepth[18].ScoreCp);  // оценка в самом конце строки разобрана
+        Assert.Equal(18, byDepth[0].ScoreCp);  // оборван сам depth — оценка всё равно есть
+
+        Assert.Empty(result.Lines);  // строки без варианта в результат поиска не идут
+        Assert.Equal("e2e4", result.BestMove);  // ход получен
+    }
+
+    [Fact(DisplayName = "UCI: строки после bestmove не портят следующий поиск")]
+    public async Task ЗапоздавшиеСтроки()
+    {
+        var infos = new List<EngineInfo>();
+        var log = new List<string>();
+        _engine.InfoReceived += (_, info) => { lock (infos) infos.Add(info); };
+        _engine.LogReceived += (_, text) => { lock (log) log.Add(text); };
+
+        bool TailArrived()
+        {
+            lock (infos)
+            lock (log)
+                return infos.Any(i => i.ScoreCp == 77) && log.Contains("< bestmove d2d4");
+        }
+
+        _engine.Send("test-scenario late");
+        var result = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken);
+        _engine.Send("test-scenario default");
+
+        // Движок дописал строку анализа и второй bestmove уже после конца поиска.
+        for (var i = 0; i < 200 && !TailArrived(); i++) await Task.Delay(10, TestContext.Current.CancellationToken);
+        Assert.True(TailArrived(), "хвост после bestmove дошёл до обёртки");
+
+        Assert.Equal("e2e4", result.BestMove);  // ход взят из первого bestmove
+        Assert.Equal(10, result.Best!.ScoreCp);  // запоздавшая строка в результат не попала
+
+        // Строка вне поиска помечена нулевым номером — по нему интерфейс отбрасывает чужое.
+        lock (infos)
+        {
+            Assert.Equal(0, infos.Single(i => i.ScoreCp == 77).SearchId);
+            Assert.All(infos.Where(i => i.ScoreCp != 77), i => Assert.NotEqual(0, i.SearchId));
+        }
+
+        // Лишний bestmove никого не разбудил: следующий поиск получает свой собственный ответ.
+        var next = await _engine.GoAsync(Position.StartFen, null, SearchLimits.ByDepth(3),
+            TestContext.Current.CancellationToken);
+        Assert.Equal("e2e4", next.BestMove);
+        Assert.False(_engine.IsSearching, "движок свободен");
+    }
+
+    [Fact(DisplayName = "UCI: вывод движка в stderr попадает в журнал")]
+    public async Task ВыводВStderr()
+    {
+        var log = new List<string>();
+        _engine.LogReceived += (_, text) => { lock (log) log.Add(text); };
+
+        bool Logged()
+        {
+            lock (log) return log.Contains("! low memory warning");
+        }
+
+        _engine.Send("test-stderr low memory warning");
+        for (var i = 0; i < 200 && !Logged(); i++) await Task.Delay(10, TestContext.Current.CancellationToken);
+
+        Assert.True(Logged(), "строка из stderr помечена восклицательным знаком");
+        await _engine.IsReadyAsync(TestContext.Current.CancellationToken);  // движок при этом жив
+    }
+
+    [Fact(DisplayName = "UCI: пустой список параметров не тревожит движок")]
+    public async Task ПустойСписокПараметров()
+    {
+        lock (_sent) _sent.Clear();
+        await _engine.ApplyOptionsAsync([], TestContext.Current.CancellationToken);
+        lock (_sent) Assert.Empty(_sent);  // не ушёл даже isready
+    }
+
     [Fact(DisplayName = "UCI: остановка поиска")]
     public async Task Остановка()
     {
-        var infinite = _engine.GoAsync(Position.StartFen, new[] { "e2e4" }, SearchLimits.AsInfinite(), TestContext.Current.CancellationToken);
+        var infinite = _engine.GoAsync(Position.StartFen, ["e2e4"], SearchLimits.AsInfinite(), TestContext.Current.CancellationToken);
         await Task.Delay(300, TestContext.Current.CancellationToken);
         var searching = _engine.IsSearching;
         await _engine.StopSearchAsync();
@@ -298,15 +405,17 @@ public class UciEngineFailureTests
         // падение движка прерывает поиск
         Assert.Equal("InvalidOperationException", crashError?.GetType().Name ?? "нет исключения");
         Assert.False(crashing.IsRunning, "после падения движок не запущен");
-        Assert.Null(Record.Exception(() => crashing.Stop()));  // остановка упавшего движка безопасна
-        Assert.Null(Record.Exception(() => crashing.Stop()));  // повторная остановка безопасна
+        // ReSharper disable once AccessToDisposedClosure
+        Assert.Null(Record.Exception(crashing.Stop));  // остановка упавшего движка безопасна
+        // ReSharper disable once AccessToDisposedClosure
+        Assert.Null(Record.Exception(crashing.Stop));  // повторная остановка безопасна
 
         // отсутствующий файл
         Assert.Equal("FileNotFoundException", startError?.GetType().Name ?? "нет исключения");
         // поиск без движка
         Assert.Equal("InvalidOperationException", goError?.GetType().Name ?? "нет исключения");
         Assert.False(missing.IsRunning, "незапущенный движок не работает");
-        Assert.Null(Record.Exception(() => missing.Dispose()));  // освобождение ресурсов
-        Assert.Null(Record.Exception(() => missing.Dispose()));  // повторное освобождение
+        Assert.Null(Record.Exception(missing.Dispose));  // освобождение ресурсов
+        Assert.Null(Record.Exception(missing.Dispose));  // повторное освобождение
     }
 }

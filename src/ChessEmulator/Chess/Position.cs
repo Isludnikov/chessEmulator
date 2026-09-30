@@ -208,36 +208,32 @@ public sealed class Position
         if (!adjacent) return false;
 
         // Пешка рядом есть, но она может быть связана — тогда взятия всё равно нет.
-        foreach (var move in LegalMoves)
-        {
-            if (IsEnPassantMove(move)) return true;
-        }
-        return false;
+        return LegalMoves.Any(IsEnPassantMove);
     }
 
     // -------------------------------------------------------- Атаки и шахи
 
     private static readonly int[][] KnightDeltas =
-    {
-        new[] { 1, 2 }, new[] { 2, 1 }, new[] { 2, -1 }, new[] { 1, -2 },
-        new[] { -1, -2 }, new[] { -2, -1 }, new[] { -2, 1 }, new[] { -1, 2 }
-    };
+    [
+        [1, 2], [2, 1], [2, -1], [1, -2],
+        [-1, -2], [-2, -1], [-2, 1], [-1, 2]
+    ];
 
     private static readonly int[][] KingDeltas =
-    {
-        new[] { 1, 0 }, new[] { 1, 1 }, new[] { 0, 1 }, new[] { -1, 1 },
-        new[] { -1, 0 }, new[] { -1, -1 }, new[] { 0, -1 }, new[] { 1, -1 }
-    };
+    [
+        [1, 0], [1, 1], [0, 1], [-1, 1],
+        [-1, 0], [-1, -1], [0, -1], [1, -1]
+    ];
 
     private static readonly int[][] BishopDeltas =
-    {
-        new[] { 1, 1 }, new[] { -1, 1 }, new[] { -1, -1 }, new[] { 1, -1 }
-    };
+    [
+        [1, 1], [-1, 1], [-1, -1], [1, -1]
+    ];
 
     private static readonly int[][] RookDeltas =
-    {
-        new[] { 1, 0 }, new[] { 0, 1 }, new[] { -1, 0 }, new[] { 0, -1 }
-    };
+    [
+        [1, 0], [0, 1], [-1, 0], [0, -1]
+    ];
 
     public int FindKing(PieceColor color)
     {
@@ -258,14 +254,14 @@ public sealed class Position
         if (Sq.IsValid(f - 1, pawnRank) && At(f - 1, pawnRank).Is(by, PieceType.Pawn)) return true;
         if (Sq.IsValid(f + 1, pawnRank) && At(f + 1, pawnRank).Is(by, PieceType.Pawn)) return true;
 
-        foreach (var d in KnightDeltas)
+        if (KnightDeltas.Any(d => Sq.IsValid(f + d[0], r + d[1]) && At(f + d[0], r + d[1]).Is(by, PieceType.Knight)))
         {
-            if (Sq.IsValid(f + d[0], r + d[1]) && At(f + d[0], r + d[1]).Is(by, PieceType.Knight)) return true;
+            return true;
         }
 
-        foreach (var d in KingDeltas)
+        if (KingDeltas.Any(d => Sq.IsValid(f + d[0], r + d[1]) && At(f + d[0], r + d[1]).Is(by, PieceType.King)))
         {
-            if (Sq.IsValid(f + d[0], r + d[1]) && At(f + d[0], r + d[1]).Is(by, PieceType.King)) return true;
+            return true;
         }
 
         return SlidingAttack(f, r, BishopDeltas, by, PieceType.Bishop)
@@ -306,14 +302,7 @@ public sealed class Position
 
     public IReadOnlyList<Move> LegalMoves => _legalCache ??= GenerateLegalMoves();
 
-    public bool IsLegal(Move move)
-    {
-        foreach (var m in LegalMoves)
-        {
-            if (m == move) return true;
-        }
-        return false;
-    }
+    public bool IsLegal(Move move) => LegalMoves.Any(m => m == move);
 
     /// <summary>Ищет легальный ход по клеткам начала и конца.</summary>
     public bool TryFindMove(int from, int to, PieceType promotion, out Move move)
@@ -329,14 +318,7 @@ public sealed class Position
         return false;
     }
 
-    public bool HasMoveFrom(int square)
-    {
-        foreach (var m in LegalMoves)
-        {
-            if (m.From == square) return true;
-        }
-        return false;
-    }
+    public bool HasMoveFrom(int square) => LegalMoves.Any(m => m.From == square);
 
     public bool IsPromotionMove(int from, int to)
     {
@@ -350,11 +332,7 @@ public sealed class Position
     {
         var pseudo = GeneratePseudoLegalMoves();
         var result = new List<Move>(pseudo.Count);
-        foreach (var move in pseudo)
-        {
-            var next = ApplyMoveRaw(move);
-            if (!next.IsInCheck(SideToMove)) result.Add(move);
-        }
+        result.AddRange(from move in pseudo let next = ApplyMoveRaw(move) where !next.IsInCheck(SideToMove) select move);
         return result;
     }
 
@@ -626,8 +604,7 @@ public sealed class Position
 
         if (knights == 0 && bishops == 0) return true;
         if (knights + bishops == 1) return true;
-        if (knights == 0 && bishopSquareColors.Count == 1) return true;
-        return false;
+        return knights == 0 && bishopSquareColors.Count == 1;
     }
 
     /// <summary>Приблизительный материальный баланс в пешках (плюс — перевес белых).</summary>
@@ -688,13 +665,7 @@ public sealed class Position
 
     private string Disambiguation(Move move, Piece moving)
     {
-        var rivals = new List<int>();
-        foreach (var m in LegalMoves)
-        {
-            if (m.To != move.To || m.From == move.From) continue;
-            var other = this[m.From];
-            if (other.Type == moving.Type && other.Color == moving.Color) rivals.Add(m.From);
-        }
+        var rivals = (from m in LegalMoves where m.To == move.To && m.From != move.From let other = this[m.From] where other.Type == moving.Type && other.Color == moving.Color select m.From).ToList();
 
         if (rivals.Count == 0) return string.Empty;
 
@@ -702,8 +673,7 @@ public sealed class Position
         var sameRank = rivals.Any(s => Sq.Rank(s) == Sq.Rank(move.From));
 
         if (!sameFile) return ((char)('a' + Sq.File(move.From))).ToString();
-        if (!sameRank) return ((char)('1' + Sq.Rank(move.From))).ToString();
-        return Sq.Name(move.From);
+        return !sameRank ? ((char)('1' + Sq.Rank(move.From))).ToString() : Sq.Name(move.From);
     }
 
     public static char PieceLetter(PieceType type) => type switch
@@ -737,7 +707,7 @@ public sealed class Position
         if (s.Length == 0) return false;
 
         var normalized = s.Replace('0', 'O');
-        if (normalized == "O-O" || normalized == "O-O-O")
+        if (normalized is "O-O" or "O-O-O")
         {
             var kingFrom = SideToMove == PieceColor.White ? 4 : 60;
             var kingTo = normalized == "O-O" ? kingFrom + 2 : kingFrom - 2;
@@ -775,8 +745,15 @@ public sealed class Position
         int hintFile = -1, hintRank = -1;
         foreach (var c in hint)
         {
-            if (c >= 'a' && c <= 'h') hintFile = c - 'a';
-            else if (c >= '1' && c <= '8') hintRank = c - '1';
+            switch (c)
+            {
+                case >= 'a' and <= 'h':
+                    hintFile = c - 'a';
+                    break;
+                case >= '1' and <= '8':
+                    hintRank = c - '1';
+                    break;
+            }
         }
 
         foreach (var m in LegalMoves)

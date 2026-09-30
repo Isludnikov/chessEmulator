@@ -6,10 +6,10 @@ namespace ChessEmulator.Chess;
 public static class Pgn
 {
     private static readonly string[] HeaderOrder =
-    {
+    [
         "Event", "Site", "Date", "Round", "White", "Black", "Result",
         "WhiteElo", "BlackElo", "ECO", "Opening", "TimeControl", "Termination", "SetUp", "FEN", "Annotator"
-    };
+    ];
 
     // --------------------------------------------------------------- Экспорт
 
@@ -31,7 +31,7 @@ public static class Pgn
 
         var body = new StringBuilder();
         WriteNodeChildren(body, game.Root, forceNumber: true);
-        body.Append(game.Headers.TryGetValue("Result", out var result) ? result : "*");
+        body.Append(game.Headers.GetValueOrDefault("Result", "*"));
 
         sb.AppendLine(WrapLines(body.ToString(), 80));
         return sb.ToString();
@@ -39,21 +39,26 @@ public static class Pgn
 
     private static void WriteNodeChildren(StringBuilder sb, MoveNode parent, bool forceNumber)
     {
-        var node = parent.MainChild;
-        if (node == null) return;
-
-        AppendMove(sb, node, forceNumber);
-
-        // Варианты к основному ходу
-        for (var i = 1; i < parent.Children.Count; i++)
+        while (true)
         {
-            sb.Append("( ");
-            AppendMove(sb, parent.Children[i], true);
-            WriteNodeChildren(sb, parent.Children[i], false);
-            sb.Append(") ");
-        }
+            var node = parent.MainChild;
+            if (node == null) return;
 
-        WriteNodeChildren(sb, node, parent.Children.Count > 1);
+            AppendMove(sb, node, forceNumber);
+
+            // Варианты к основному ходу
+            for (var i = 1; i < parent.Children.Count; i++)
+            {
+                sb.Append("( ");
+                AppendMove(sb, parent.Children[i], true);
+                WriteNodeChildren(sb, parent.Children[i], false);
+                sb.Append(") ");
+            }
+
+            var parent1 = parent;
+            parent = node;
+            forceNumber = parent1.Children.Count > 1;
+        }
     }
 
     private static void AppendMove(StringBuilder sb, MoveNode node, bool forceNumber)
@@ -80,7 +85,7 @@ public static class Pgn
         .Replace('\r', ' ')
         .Replace('\n', ' ');
 
-    private static string Escape(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    private static string Escape(string value) => value.Replace("\\", @"\\").Replace("\"", "\\\"");
 
     private static string WrapLines(string text, int width)
     {
@@ -110,8 +115,7 @@ public static class Pgn
     public static Game Read(string pgnText)
     {
         var games = ReadAll(pgnText, 1);
-        if (games.Count == 0) throw new FormatException("В файле не найдено ни одной партии.");
-        return games[0];
+        return games.Count == 0 ? throw new FormatException("В файле не найдено ни одной партии.") : games[0];
     }
 
     /// <summary>Разбирает все партии из текста PGN (не более <paramref name="limit"/>).</summary>
@@ -121,8 +125,7 @@ public static class Pgn
         foreach (var chunk in SplitGames(pgnText))
         {
             if (result.Count >= limit) break;
-            var game = ParseSingle(chunk);
-            if (game != null) result.Add(game);
+            result.Add(ParseSingle(chunk));
         }
         return result;
     }
@@ -174,7 +177,7 @@ public static class Pgn
         return depth;
     }
 
-    private static Game? ParseSingle(string text)
+    private static Game ParseSingle(string text)
     {
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var moveText = new StringBuilder();
@@ -194,7 +197,7 @@ public static class Pgn
                 {
                     var key = line[1..firstQuote].Trim();
                     var value = line.Substring(firstQuote + 1, lastQuote - firstQuote - 1)
-                        .Replace("\\\"", "\"").Replace("\\\\", "\\");
+                        .Replace("\\\"", "\"").Replace(@"\\", "\\");
                     if (key.Length > 0) headers[key] = value;
                 }
             }

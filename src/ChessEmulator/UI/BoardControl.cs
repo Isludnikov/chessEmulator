@@ -5,16 +5,14 @@ using ChessEmulator.Chess;
 
 namespace ChessEmulator.UI;
 
-public sealed class MoveMadeEventArgs : EventArgs
+public sealed class MoveMadeEventArgs(Move move) : EventArgs
 {
-    public MoveMadeEventArgs(Move move) => Move = move;
-    public Move Move { get; }
+    public Move Move { get; } = move;
 }
 
-public sealed class PromotionEventArgs : EventArgs
+public sealed class PromotionEventArgs(PieceColor color) : EventArgs
 {
-    public PromotionEventArgs(PieceColor color) => Color = color;
-    public PieceColor Color { get; }
+    public PieceColor Color { get; } = color;
     public PieceType Selected { get; set; } = PieceType.Queen;
     public bool Cancelled { get; set; }
 }
@@ -33,29 +31,17 @@ public enum BoardMode
 }
 
 /// <summary>Щелчок по клетке в режиме редактирования.</summary>
-public sealed class EditSquareEventArgs : EventArgs
+public sealed class EditSquareEventArgs(int square, MouseButtons button) : EventArgs
 {
-    public EditSquareEventArgs(int square, MouseButtons button)
-    {
-        Square = square;
-        Button = button;
-    }
-
-    public int Square { get; }
-    public MouseButtons Button { get; }
+    public int Square { get; } = square;
+    public MouseButtons Button { get; } = button;
 }
 
 /// <summary>Перетаскивание фигуры в режиме редактирования. <see cref="To"/> = Sq.None — фигуру сбросили мимо доски.</summary>
-public sealed class EditDragEventArgs : EventArgs
+public sealed class EditDragEventArgs(int from, int to) : EventArgs
 {
-    public EditDragEventArgs(int from, int to)
-    {
-        From = from;
-        To = to;
-    }
-
-    public int From { get; }
-    public int To { get; }
+    public int From { get; } = from;
+    public int To { get; } = to;
 }
 
 /// <summary>Интерактивная шахматная доска: отрисовка позиции, ходы мышью, подсветки и стрелки.</summary>
@@ -68,10 +54,9 @@ public sealed class BoardControl : Control
     private int _dragFrom = Sq.None;
     private Point _dragPoint;
     private bool _dragging;
-    private readonly List<int> _targets = new();
-    private readonly List<BoardArrow> _arrows = new();
-    private Chess.Move _lastMove = Chess.Move.None;
-    private BoardMode _mode = BoardMode.Play;
+    private readonly List<int> _targets = [];
+    private readonly List<BoardArrow> _arrows = [];
+    private Move _lastMove = Chess.Move.None;
     private Point _dragOrigin;
 
     private string? _bannerHeadline;
@@ -117,11 +102,11 @@ public sealed class BoardControl : Control
     [DefaultValue(BoardMode.Play)]
     public BoardMode Mode
     {
-        get => _mode;
+        get;
         set
         {
-            if (_mode == value) return;
-            _mode = value;
+            if (field == value) return;
+            field = value;
             _selected = Sq.None;
             _targets.Clear();
             _dragging = false;
@@ -131,7 +116,7 @@ public sealed class BoardControl : Control
             _bannerScore = string.Empty;
             Invalidate();
         }
-    }
+    } = BoardMode.Play;
 
     /// <summary>Фигура, которую ставит щелчок в режиме редактирования. Пустая фигура — ластик.</summary>
     [Browsable(false)]
@@ -167,7 +152,7 @@ public sealed class BoardControl : Control
 
     [Browsable(false)]
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public Chess.Move LastMove
+    public Move LastMove
     {
         get => _lastMove;
         set { _lastMove = value; Invalidate(); }
@@ -206,7 +191,6 @@ public sealed class BoardControl : Control
     /// </summary>
     public void ShowResultBanner(string headline, string score, BoardBannerStyle style)
     {
-        score ??= string.Empty;
         if (_bannerHeadline == headline && _bannerScore == score && _bannerStyle == style) return;
         _bannerHeadline = headline;
         _bannerScore = score;
@@ -390,7 +374,7 @@ public sealed class BoardControl : Control
         foreach (var target in _targets)
         {
             var rect = SquareRect(target);
-            if (_position[target].IsEmpty && !_position.IsEnPassantMove(new Chess.Move(_selected, target)))
+            if (_position[target].IsEmpty && !_position.IsEnPassantMove(new Move(_selected, target)))
             {
                 var d = (int)(_squareSize * 0.28f);
                 g.FillEllipse(dot, rect.X + (rect.Width - d) / 2, rect.Y + (rect.Height - d) / 2, d, d);

@@ -2,6 +2,7 @@ using ChessEmulator.App;
 using ChessEmulator.Engine;
 using ChessEmulator.UI;
 using Xunit;
+using static ChessEmulator.UiTests.MainFormHarness;
 
 namespace ChessEmulator.UiTests;
 
@@ -11,23 +12,6 @@ namespace ChessEmulator.UiTests;
 /// </summary>
 public class MainFormTests
 {
-    /// <summary>Выполняет действие, направив файл настроек во временную папку.</summary>
-    private static void WithSettingsFile(Action body)
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "ChessEmulatorTests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable(AppSettings.PathOverrideVariable, Path.Combine(dir, "settings.json"));
-        try
-        {
-            body();
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(AppSettings.PathOverrideVariable, null);
-            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
-        }
-    }
-
     private static ComboBox DifficultyBox(Control root) =>
         UiHarness.All(root).OfType<ComboBox>().Single(c => c.Name == "difficultyBox");
 
@@ -79,7 +63,7 @@ public class MainFormTests
             typeof(MainForm)
                 .GetMethod("SetPlayControlsEnabled",
                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
-                .Invoke(form, new object[] { false });
+                .Invoke(form, [false]);
 
             Assert.False(box.Enabled, "в редакторе уровень заперт");
         });
@@ -102,11 +86,11 @@ public class MainFormTests
             // Двойной щелчок по строке анализа ведёт сюда в обход запертой доски: ход встал бы
             // в позицию, для которой движок уже ищет свой.
             typeof(MainForm).GetField("_engineBusyWithMove", flags)!.SetValue(form, true);
-            applyUserMove.Invoke(form, new object[] { e4 });
+            applyUserMove.Invoke(form, [e4]);
             Assert.True(game.Current.IsRoot, "пока движок думает, ход не принят");
 
             typeof(MainForm).GetField("_engineBusyWithMove", flags)!.SetValue(form, false);
-            applyUserMove.Invoke(form, new object[] { d4 });
+            applyUserMove.Invoke(form, [d4]);
             Assert.Equal("d2d4", game.Current.Move.ToUci());  // свободный движок ход пропускает
         });
     }

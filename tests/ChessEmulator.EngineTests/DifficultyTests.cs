@@ -7,8 +7,8 @@ namespace ChessEmulator.EngineTests;
 public class DifficultyTests
 {
     private static DifficultyDefaults Defaults(int skill = 20, bool limit = false,
-        int elo = 1600, int moveTime = 1000, int multiPv = 3) =>
-        new(skill, limit, elo, moveTime, multiPv);
+        int elo = 1600, int moveTime = 1000) =>
+        new(skill, limit, elo, moveTime);
 
     [Fact(DisplayName = "Сложность: таблица уровней")]
     public void ТаблицаУровней()
@@ -16,11 +16,10 @@ public class DifficultyTests
         var all = Difficulty.All;
         Assert.Equal(6, all.Count);
         Assert.Equal(
-            new[]
-            {
+            [
                 DifficultyLevel.Beginner, DifficultyLevel.Amateur, DifficultyLevel.Club,
                 DifficultyLevel.Expert, DifficultyLevel.Maximum, DifficultyLevel.Custom
-            },
+            ],
             all.Select(p => p.Level));
 
         Assert.All(all, p => Assert.False(string.IsNullOrWhiteSpace(p.Title), "у уровня есть надпись"));

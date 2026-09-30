@@ -8,8 +8,11 @@ namespace ChessEmulator.UI;
 
 public sealed class MainForm : Form
 {
+    // Значения совпадают с индексами _playModeBox (см. CurrentMode), поэтому Analysis нужен,
+    // хотя по имени нигде не упоминается.
     private enum PlayMode
     {
+        // ReSharper disable once UnusedMember.Local
         Analysis,
         EngineBlack,
         EngineWhite
@@ -252,12 +255,7 @@ public sealed class MainForm : Form
         };
         _playModeBox.DropDownStyle = ComboBoxStyle.DropDownList;
         _playModeBox.Width = 190;
-        _playModeBox.Items.AddRange(new object[]
-        {
-            "Анализ (ходят оба)",
-            "Играю белыми — движок чёрными",
-            "Играю чёрными — движок белыми"
-        });
+        _playModeBox.Items.AddRange("Анализ (ходят оба)", "Играю белыми — движок чёрными", "Играю чёрными — движок белыми");
         _playModeBox.SelectedIndex = 0;
 
         StyleEngineButton(_hintButton, "Подсказка", "Показать лучший ход, не делая его", new Padding(10, 2, 0, 0));
@@ -278,7 +276,7 @@ public sealed class MainForm : Form
         _difficultyBox.Name = "difficultyBox";
         _difficultyBox.DropDownStyle = ComboBoxStyle.DropDownList;
         _difficultyBox.Width = 150;
-        _difficultyBox.Items.AddRange(Difficulty.All.Select(p => (object)p.Title).ToArray());
+        _difficultyBox.Items.AddRange([.. Difficulty.All.Select(p => (object)p.Title)]);
         _difficultyBox.SelectedIndex = Difficulty.IndexOf(_settings.Difficulty);
 
         _difficultyHint.AutoSize = true;
@@ -429,6 +427,9 @@ public sealed class MainForm : Form
             Renderer = new ToolStripProfessionalRenderer()
         };
 
+        // Асинхронные пункты меню — обычные async-обработчики событий WinForms: исключение из них
+        // уходит в Application.ThreadException (см. Program), а не роняет процесс.
+        // ReSharper disable AsyncVoidLambda
         var file = new ToolStripMenuItem("Партия");
         file.DropDownItems.Add(new ToolStripMenuItem("Новая партия", null, async (_, _) => await NewGameAsync()) { ShortcutKeys = Keys.Control | Keys.N });
         file.DropDownItems.Add(new ToolStripMenuItem("Новая партия из позиции (FEN)…", null, async (_, _) => await NewGameFromFenAsync()));
@@ -457,7 +458,7 @@ public sealed class MainForm : Form
         {
             ShortcutKeyDisplayString = "F"
         };
-        var coordsItem = new ToolStripMenuItem("Показывать координаты", null, (_, _) => { }) { CheckOnClick = true, Checked = _settings.ShowCoordinates };
+        var coordsItem = new ToolStripMenuItem("Показывать координаты") { CheckOnClick = true, Checked = _settings.ShowCoordinates };
         coordsItem.Click += (_, _) =>
         {
             _settings.ShowCoordinates = coordsItem.Checked;
@@ -465,7 +466,7 @@ public sealed class MainForm : Form
             _board.Invalidate();
             _settings.Save();
         };
-        var hintsItem = new ToolStripMenuItem("Подсвечивать возможные ходы", null, (_, _) => { }) { CheckOnClick = true, Checked = _settings.ShowLegalMoveHints };
+        var hintsItem = new ToolStripMenuItem("Подсвечивать возможные ходы") { CheckOnClick = true, Checked = _settings.ShowLegalMoveHints };
         hintsItem.Click += (_, _) =>
         {
             _settings.ShowLegalMoveHints = hintsItem.Checked;
@@ -473,7 +474,7 @@ public sealed class MainForm : Form
             _board.Invalidate();
             _settings.Save();
         };
-        _arrowMenuItem = new ToolStripMenuItem("Показывать стрелки лучших ходов", null, (_, _) => { }) { CheckOnClick = true, Checked = _settings.ShowBestMoveArrow };
+        _arrowMenuItem = new ToolStripMenuItem("Показывать стрелки лучших ходов") { CheckOnClick = true, Checked = _settings.ShowBestMoveArrow };
         _arrowMenuItem.Click += (_, _) =>
         {
             _settings.ShowBestMoveArrow = _arrowMenuItem.Checked;
@@ -492,10 +493,7 @@ public sealed class MainForm : Form
             ShortcutKeyDisplayString = "H"
         };
 
-        view.DropDownItems.AddRange(new ToolStripItem[]
-        {
-            flipItem, coordsItem, hintsItem, _arrowMenuItem, new ToolStripSeparator(), _engineHintsMenuItem
-        });
+        view.DropDownItems.AddRange(flipItem, coordsItem, hintsItem, _arrowMenuItem, new ToolStripSeparator(), _engineHintsMenuItem);
 
         var engineMenu = new ToolStripMenuItem("Движок");
         _analysisMenuItem = new ToolStripMenuItem("Анализ включён", null, (_, _) => ToggleAnalysis())
@@ -509,6 +507,7 @@ public sealed class MainForm : Form
         engineMenu.DropDownItems.Add(new ToolStripSeparator());
         engineMenu.DropDownItems.Add(new ToolStripMenuItem("Настройки движка…", null, async (_, _) => await ShowEngineSettingsAsync()));
         engineMenu.DropDownItems.Add(new ToolStripMenuItem("Перезапустить движок", null, async (_, _) => await RestartEngineAsync()));
+        // ReSharper restore AsyncVoidLambda
         engineMenu.DropDownItems.Add(new ToolStripSeparator());
         engineMenu.DropDownItems.Add(new ToolStripMenuItem("Журнал UCI…", null, (_, _) => ShowUciLog()));
 
@@ -521,7 +520,7 @@ public sealed class MainForm : Form
         _fileMenu = file;
         _engineMenu = engineMenu;
 
-        menu.Items.AddRange(new ToolStripItem[] { file, view, engineMenu, help });
+        menu.Items.AddRange(file, view, engineMenu, help);
         return menu;
     }
 
@@ -571,11 +570,7 @@ public sealed class MainForm : Form
             else await BeginPositionEditAsync();
         };
 
-        strip.Items.AddRange(new ToolStripItem[]
-        {
-            newGame, open, save, _editButton, new ToolStripSeparator(),
-            _analysisButton, analyzeGame, new ToolStripSeparator(), settings
-        });
+        strip.Items.AddRange(newGame, open, save, _editButton, new ToolStripSeparator(), _analysisButton, analyzeGame, new ToolStripSeparator(), settings);
         _toolStrip = strip;
         return strip;
     }
@@ -596,10 +591,7 @@ public sealed class MainForm : Form
         _resultStatus.Text = "Партия идёт";
         _progress.Visible = false;
         _progress.Width = 160;
-        _statusStrip.Items.AddRange(new ToolStripItem[]
-        {
-            _engineStatus, _searchStatus, _opponentStatus, _progress, _resultStatus
-        });
+        _statusStrip.Items.AddRange(_engineStatus, _searchStatus, _opponentStatus, _progress, _resultStatus);
     }
 
     private void WireEvents()
@@ -728,7 +720,7 @@ public sealed class MainForm : Form
 
     // ------------------------------------------------------- Работа с партией
 
-    private void ApplyUserMove(Chess.Move move)
+    private void ApplyUserMove(Move move)
     {
         if (_editing) return;
         // Доска в это время заблокирована, но сюда ведёт и двойной щелчок по строке анализа:
@@ -879,9 +871,9 @@ public sealed class MainForm : Form
             list.Items.Add($"{Header(g, "White")} — {Header(g, "Black")}  ({Header(g, "Result")}, {Header(g, "Date")}, {Header(g, "Event")})");
         }
         list.SelectedIndex = 0;
-        list.DoubleClick += (_, _) => { dialog.DialogResult = DialogResult.OK; dialog.Close(); };
 
         var ok = new Button { Text = "Открыть", Dock = DockStyle.Bottom, Height = 34, DialogResult = DialogResult.OK };
+        list.DoubleClick += (_, _) => ok.PerformClick();
         dialog.Controls.Add(list);
         dialog.Controls.Add(ok);
         dialog.AcceptButton = ok;
@@ -890,7 +882,7 @@ public sealed class MainForm : Form
             ? games[list.SelectedIndex]
             : null;
 
-        static string Header(Game g, string key) => g.Headers.TryGetValue(key, out var v) ? v : "?";
+        static string Header(Game g, string key) => g.Headers.GetValueOrDefault(key, "?");
     }
 
     private void SavePgn()
@@ -919,8 +911,8 @@ public sealed class MainForm : Form
 
     private string BuildFileName()
     {
-        var white = _game.Headers.TryGetValue("White", out var w) ? w : "White";
-        var black = _game.Headers.TryGetValue("Black", out var b) ? b : "Black";
+        var white = _game.Headers.GetValueOrDefault("White", "White");
+        var black = _game.Headers.GetValueOrDefault("Black", "Black");
         var name = $"{white}-{black}-{DateTime.Now:yyyyMMdd}.pgn";
         foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
         return name;
@@ -1297,7 +1289,7 @@ public sealed class MainForm : Form
     private DifficultyProfile CurrentDifficulty() => Difficulty.Resolve(
         _settings.Difficulty,
         new DifficultyDefaults(_settings.SkillLevel, _settings.LimitStrength,
-            _settings.EloRating, _settings.EngineMoveTimeMs, _settings.MultiPv));
+            _settings.EloRating, _settings.EngineMoveTimeMs));
 
     /// <summary>
     /// Возврат к полной силе после хода соперника. Threads и Hash сюда не входят: у обоих
@@ -1397,7 +1389,7 @@ public sealed class MainForm : Form
         _searchStatus.Text = "Движок не отвечает — перезапуск…";
         try
         {
-            await StartEngineAsync(path!);
+            await StartEngineAsync(path);
         }
         catch (Exception ex)
         {
@@ -1654,14 +1646,13 @@ public sealed class MainForm : Form
 
         _linesView.BeginUpdate();
         _linesView.Items.Clear();
-        foreach (var pair in _lines.OrderBy(p => p.Key))
+        foreach (var (key, info) in _lines.OrderBy(p => p.Key))
         {
-            var info = pair.Value;
             var item = new ListViewItem(info.ScoreText(whiteToMove));
             item.SubItems.Add(info.Depth.ToString());
             item.SubItems.Add(PvToSan(position, info.Pv, 14));
             item.Tag = info;
-            if (pair.Key == 1) item.ForeColor = Color.FromArgb(150, 220, 150);
+            if (key == 1) item.ForeColor = Color.FromArgb(150, 220, 150);
             _linesView.Items.Add(item);
         }
         _linesView.EndUpdate();
@@ -1675,18 +1666,14 @@ public sealed class MainForm : Form
             return;
         }
 
-        var arrows = new List<BoardArrow>();
-        foreach (var pair in _lines.OrderByDescending(p => p.Key))
-        {
-            if (pair.Value.Pv.Length == 0) continue;
-            var move = Chess.Move.FromUci(pair.Value.Pv[0]);
-            if (move.IsNone) continue;
-
-            var color = pair.Key == 1
+        var arrows = (from pair in _lines.OrderByDescending(p => p.Key)
+            where pair.Value.Pv.Length != 0
+            let move = Chess.Move.FromUci(pair.Value.Pv[0])
+            where !move.IsNone
+            let color = pair.Key == 1
                 ? Color.FromArgb(200, 90, 180, 90)
-                : Color.FromArgb(110, 90, 140, 200);
-            arrows.Add(new BoardArrow(move.From, move.To, color, pair.Key == 1 ? 1f : 0.7f));
-        }
+                : Color.FromArgb(110, 90, 140, 200)
+            select new BoardArrow(move.From, move.To, color, pair.Key == 1 ? 1f : 0.7f)).ToList();
         _board.SetArrows(arrows);
     }
 
@@ -1708,14 +1695,14 @@ public sealed class MainForm : Form
         }
 
         var node = _game.Current;
-        if (!node.IsRoot && node.Parent is { } parent && parent.EvalCp.HasValue && node.EvalCp.HasValue)
+        if (node is { IsRoot: false, Parent: { EvalCp: not null } parent, EvalCp: not null })
         {
             var loss = node.IsWhiteMove
                 ? parent.EvalCp.Value - node.EvalCp.Value
                 : node.EvalCp.Value - parent.EvalCp.Value;
             if (loss > 30)
                 sb.AppendLine($"Сделанный ход {node.San} уступает лучшему примерно " +
-                              $"{(loss / 100.0).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} пешки.");
+                              $"{(loss / 100.0).ToString("0.00", CultureInfo.InvariantCulture)} пешки.");
         }
 
         _adviceBox.Text = sb.ToString();
@@ -1876,7 +1863,7 @@ public sealed class MainForm : Form
             else
             {
                 var color = Color.FromArgb(210, 230, 160, 70);
-                _board.SetArrows(new[] { new BoardArrow(move.From, move.To, color) });
+                _board.SetArrows([new BoardArrow(move.From, move.To, color)]);
                 _adviceBox.Text = $"Подсказка: {position.ToSan(move)}" +
                                   (result.Best != null
                                       ? $" (оценка {result.Best.ScoreText(position.SideToMove == PieceColor.White)})"
@@ -1892,7 +1879,6 @@ public sealed class MainForm : Form
                 UpdateEngineControlsEnabled();
             }
             await HandleEngineWedgedAsync(engine, ex.Message);
-            return;
         }
         catch (Exception ex)
         {
@@ -2002,7 +1988,7 @@ public sealed class MainForm : Form
                 }
                 else
                 {
-                    var result = await engine.GoAsync(startFen, movesSoFar.ToList(),
+                    var result = await engine.GoAsync(startFen, [.. movesSoFar],
                         SearchLimits.ByTime(_settings.GameAnalysisMoveTimeMs), token);
 
                     var info = result.Best;

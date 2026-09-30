@@ -17,7 +17,7 @@ public sealed class EngineInfo
     public int TimeMs { get; set; }
     public int HashFull { get; set; }
     public int TbHits { get; set; }
-    public string[] Pv { get; set; } = Array.Empty<string>();
+    public string[] Pv { get; set; } = [];
 
     /// <summary>
     /// Номер поиска, во время которого пришла строка (0 — вне поиска). Строки доходят до
@@ -55,7 +55,7 @@ public sealed class UciOption
     public string Default { get; set; } = string.Empty;
     public string? Min { get; set; }
     public string? Max { get; set; }
-    public List<string> Vars { get; } = new();
+    public List<string> Vars { get; } = [];
 }
 
 /// <summary>Ограничения поиска для команды "go".</summary>
@@ -105,7 +105,4 @@ public sealed class SearchResult
 /// Наследуется от InvalidOperationException, чтобы уже существующие обработчики
 /// «движок недоступен» не пропускали этот случай.
 /// </summary>
-public sealed class EngineUnresponsiveException : InvalidOperationException
-{
-    public EngineUnresponsiveException(string message) : base(message) { }
-}
+public sealed class EngineUnresponsiveException(string message) : InvalidOperationException(message);

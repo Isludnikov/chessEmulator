@@ -14,6 +14,7 @@ public class EvalBarTests
     {
         using var bar = new EvalBar { ClientSize = new Size(Width, Height) };
 
+        // ReSharper disable once AccessToDisposedClosure
         Assert.Null(Record.Exception(() => UiHarness.Render(bar).Dispose()));  // пустая шкала рисуется
 
         Assert.Equal(0.5, WhitePart(bar, 0, null), 0.05);  // равная позиция — шкала пополам

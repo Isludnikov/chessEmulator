@@ -117,8 +117,10 @@ public class SanTests(ITestOutputHelper output)
         var two = Position.FromFen("4k3/8/8/8/8/5N2/8/1N2K3 w - - 0 1");
         Assert.True(two.TryParseSan("Nbd2", out var nbd2), "уточнение по вертикали разбирается");
         Assert.Equal("b1d2", nbd2.ToUci());  // выбран нужный конь
+        // ReSharper disable once InconsistentNaming
         Assert.True(Position.FromFen(TwoRooks).TryParseSan("R1a3", out var r1a3), "уточнение по горизонтали разбирается");
         Assert.Equal("a1a3", r1a3.ToUci());  // выбрана нужная ладья
+        // ReSharper disable once InconsistentNaming
         Assert.True(Position.FromFen(ThreeQueens).TryParseSan("Qh4e4", out var qh4e4), "полное уточнение разбирается");
         Assert.Equal("h4e4", qh4e4.ToUci());  // выбран нужный ферзь
 

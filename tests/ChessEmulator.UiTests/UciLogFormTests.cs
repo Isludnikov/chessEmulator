@@ -21,7 +21,7 @@ public sealed class UciLogFormTests
     /// <summary>Записи копятся и переносятся в окно пачкой по таймеру — без окна дёргаем вручную.</summary>
     private static void Flush(Form form) =>
         form.GetType().GetMethod("Flush", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(form, Array.Empty<object>());
+            .Invoke(form, []);
 
     [Fact(DisplayName = "Журнал UCI: строки анализа скрыты, остальные видны")]
     public void ФильтрInfo()
@@ -65,8 +65,33 @@ public sealed class UciLogFormTests
         // При закрытии окно отписывается от журнала: иначе оно копило бы строки вечно
         // и трогало уже освобождённый TextBox.
         Assert.Equal(1, SubscriberCount(log));
+        // ReSharper disable once DisposeOnUsingVariable
         form.Dispose();
         Assert.Equal(0, SubscriberCount(log));
         Assert.Null(Record.Exception(() => log.Add("> stop")));  // журнал живёт дальше без окна
+    }
+
+    [Fact(DisplayName = "Журнал UCI: пустая пачка и закрытое окно")]
+    public void СбросБезЗаписей()
+    {
+        var log = new UciLog();
+        log.Add("> isready");
+        var form = new UciLogForm(log);
+        var before = Text(form).Text;
+
+        Flush(form);  // за время между тиками ничего не пришло
+        Assert.Equal(before, Text(form).Text);
+
+        // С выключенной прокруткой записи дописываются точно так же.
+        UiHarness.ByText<CheckBox>(form, "Прокручивать").Checked = false;
+        log.Add("< readyok");
+        Flush(form);
+        Assert.Contains("< readyok", Text(form).Text);
+
+        // Тик таймера, поставленный в очередь до закрытия окна, не должен трогать
+        // уже освобождённое поле с текстом.
+        log.Add("> go infinite");
+        form.Dispose();
+        Assert.Null(Record.Exception(() => Flush(form)));
     }
 }

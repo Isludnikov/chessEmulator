@@ -16,7 +16,6 @@ public class OpponentMovePickerTests
     private sealed class FixedRandom(double value) : Random
     {
         public override double NextDouble() => value;
-        public override int Next(int maxValue) => 0;
     }
 
     private static SearchResult Result(string bestMove, params (string Uci, int? Cp, int? Mate)[] lines)
@@ -29,7 +28,7 @@ public class OpponentMovePickerTests
                 MultiPv = i + 1,
                 ScoreCp = lines[i].Cp,
                 ScoreMate = lines[i].Mate,
-                Pv = lines[i].Uci.Length == 0 ? Array.Empty<string>() : new[] { lines[i].Uci }
+                Pv = lines[i].Uci.Length == 0 ? [] : [lines[i].Uci]
             };
         }
         return result;
@@ -74,7 +73,7 @@ public class OpponentMovePickerTests
 
         foreach (var profile in Difficulty.All)
         {
-            var resolved = Difficulty.Resolve(profile.Level, new DifficultyDefaults(3, true, 1500, 500, 3));
+            var resolved = Difficulty.Resolve(profile.Level, new DifficultyDefaults(3, true, 1500, 500));
             for (var i = 0; i < 400; i++)
             {
                 var choice = OpponentMovePicker.Pick(result, position, resolved, random);

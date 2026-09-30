@@ -2,7 +2,7 @@
 //
 // Кроме UCI понимает служебные команды тестов:
 //   test-scenario <имя>  — что отвечать на следующую команду go
-//                          (default, mate, none, multipv, silent, garbage, bare)
+//                          (default, mate, none, multipv, silent, garbage, bare, truncated, late)
 //   test-mode <имя>      — как вести себя циклу чтения команд:
 //                          lenient (по умолчанию) — команды читаются всегда, новый go отменяет
 //                              предыдущий поиск;
@@ -15,9 +15,9 @@
 //                          deaf — то же самое, но stop игнорируется: движок болтает вечно;
 //                          deaf-ready — на isready ответа нет.
 //   test-crash           — немедленно завершить процесс, как упавший движок
-using System;
-using System.Threading;
-using System.Threading.Tasks;
+//   test-stderr <текст>  — написать строку в stderr, как движок с предупреждением
+// Флаги сценария меняются по ходу диалога и нарочно читаются из замыканий поиска.
+// ReSharper disable AccessToModifiedClosure
 
 object outLock = new();
 CancellationTokenSource? searchCts = null;
@@ -72,6 +72,29 @@ void Search(bool infinite, CancellationToken token)
             Say("info depth 5 currmove e2e4 currmovenumber 1");
             break;
 
+        case "truncated":
+            // Строки, оборванные на полуслове: после ключевого слова нет значения.
+            Say("info depth 7 score cp 11 seldepth");
+            Say("info depth 8 score cp 12 multipv");
+            Say("info depth 9 score cp 13 nodes");
+            Say("info depth 10 score cp 14 nps");
+            Say("info depth 11 score cp 15 time");
+            Say("info depth 12 score cp 16 hashfull");
+            Say("info depth 13 score cp 17 tbhits");
+            Say("info depth 14 score cp");
+            Say("info depth 15 score mate");
+            Say("info depth 16 score");
+            Say("info depth 17 pv");
+            Say("info depth 18 score cp 19");
+            Say("info score cp 18 depth");
+            // Ни одного знакомого поля: такую строку обёртка не показывает вовсе.
+            Say("info currmove e2e4 currmovenumber 1");
+            break;
+
+        case "late":
+            Say("info depth 3 multipv 1 score cp 10 nodes 50 pv e2e4");
+            break;
+
         default:
             Say("info string начинаем поиск");
             Say("info depth 1 seldepth 1 multipv 1 score cp 24 nodes 20 nps 20000 time 1 pv e2e4 e7e5");
@@ -115,6 +138,13 @@ void Search(bool infinite, CancellationToken token)
         "multipv" => "bestmove e2e4",
         _ => "bestmove e2e4 ponder e7e5"
     });
+
+    if (scenario == "late")
+    {
+        // Хвост после конца поиска: строка анализа и второй bestmove, которых уже никто не ждёт.
+        Say("info depth 9 multipv 1 score cp 77 pv d2d4");
+        Say("bestmove d2d4");
+    }
 }
 
 // Настоящий Stockfish обрабатывает всё, кроме stop/quit/ponderhit, только после конца поиска —
@@ -125,8 +155,7 @@ void WaitForSearchFinished()
     try { searchTask?.Wait(); } catch { /* поиск отменён */ }
 }
 
-string? line;
-while ((line = Console.ReadLine()) != null)
+while (Console.ReadLine() is { } line)
 {
     if (line == "stop")
     {
@@ -139,8 +168,6 @@ while ((line = Console.ReadLine()) != null)
         searchCts?.Cancel();
         break;
     }
-
-    if (line == "ponderhit") continue;
 
     WaitForSearchFinished();
 
@@ -180,6 +207,10 @@ while ((line = Console.ReadLine()) != null)
     else if (line == "test-crash")
     {
         Environment.Exit(3);
+    }
+    else if (line.StartsWith("test-stderr "))
+    {
+        Console.Error.WriteLine(line["test-stderr ".Length..]);
     }
     else if (line.StartsWith("go"))
     {

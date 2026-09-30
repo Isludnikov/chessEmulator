@@ -24,12 +24,14 @@ public class PositionBuilderTests
         Assert.Equal("8/8/8/8/8/8/8/8 w - - 0 1", new PositionBuilder().ToFen());  // пустая доска
         Assert.Equal(Position.StartFen, PositionBuilder.StartPosition().ToFen());  // начальная позиция
 
-        var manual = new PositionBuilder();
-        manual[Sq.Parse("e1")] = new Piece(PieceColor.White, PieceType.King);
-        manual[Sq.Parse("e8")] = new Piece(PieceColor.Black, PieceType.King);
-        manual[Sq.Parse("d4")] = new Piece(PieceColor.White, PieceType.Queen);
-        manual.SideToMove = PieceColor.Black;
-        manual.FullmoveNumber = 7;
+        var manual = new PositionBuilder
+        {
+            [Sq.Parse("e1")] = new Piece(PieceColor.White, PieceType.King),
+            [Sq.Parse("e8")] = new Piece(PieceColor.Black, PieceType.King),
+            [Sq.Parse("d4")] = new Piece(PieceColor.White, PieceType.Queen),
+            SideToMove = PieceColor.Black,
+            FullmoveNumber = 7
+        };
         Assert.Equal("4k3/8/8/8/3Q4/8/8/4K3 b - - 0 7", manual.ToFen());  // ручная расстановка
         Assert.Equal("Q", manual[Sq.Parse("d4")].ToFenChar().ToString());  // чтение клетки
         Assert.True(manual[Sq.Parse("a1")].IsEmpty, "пустая клетка читается");
@@ -153,8 +155,10 @@ public class PositionBuilderTests
         var noKings = new PositionBuilder();
         Assert.Equal(2, noKings.Validate().Count);  // нет обоих королей — две ошибки
 
-        var noBlackKing = new PositionBuilder();
-        noBlackKing[Sq.Parse("e1")] = new Piece(PieceColor.White, PieceType.King);
+        var noBlackKing = new PositionBuilder
+        {
+            [Sq.Parse("e1")] = new Piece(PieceColor.White, PieceType.King)
+        };
         Assert.Single(noBlackKing.Validate());  // нет чёрного короля
         Assert.Equal("На доске нет чёрного короля.", noBlackKing.Validate()[0]);  // текст ошибки
 
@@ -187,11 +191,13 @@ public class PositionBuilderTests
         Assert.Empty(PositionBuilder.FromFen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1").Validate());
 
         // Полный сценарий редактора: собрать позицию и начать с неё партию
-        var builder = new PositionBuilder();
-        builder[Sq.Parse("e1")] = new Piece(PieceColor.White, PieceType.King);
-        builder[Sq.Parse("a1")] = new Piece(PieceColor.White, PieceType.Rook);
-        builder[Sq.Parse("h8")] = new Piece(PieceColor.Black, PieceType.King);
-        builder.Castling = CastlingRights.All;
+        var builder = new PositionBuilder
+        {
+            [Sq.Parse("e1")] = new Piece(PieceColor.White, PieceType.King),
+            [Sq.Parse("a1")] = new Piece(PieceColor.White, PieceType.Rook),
+            [Sq.Parse("h8")] = new Piece(PieceColor.Black, PieceType.King),
+            Castling = CastlingRights.All
+        };
         builder.Normalize();
         Assert.Equal("Q", CastlingText(builder.Castling));  // осталось только реальное право на длинную рокировку
         Assert.Empty(builder.Validate());  // позиция корректна

@@ -18,14 +18,12 @@ public readonly record struct UciLogEntry(DateTime Time, string Text)
 /// Кольцевой буфер последних строк диалога с движком. Нужен, чтобы сбой протокола было видно
 /// сразу: в окне «Журнал UCI…» и в отчёте, который сохраняется при зависании движка.
 /// </summary>
-public sealed class UciLog
+public sealed class UciLog(int capacity = 3000)
 {
     private readonly object _gate = new();
     private readonly Queue<UciLogEntry> _entries = new();
 
-    public UciLog(int capacity = 3000) => Capacity = Math.Max(1, capacity);
-
-    public int Capacity { get; }
+    public int Capacity { get; } = Math.Max(1, capacity);
 
     public event EventHandler<UciLogEntry>? EntryAdded;
 
@@ -49,13 +47,13 @@ public sealed class UciLog
 
     public UciLogEntry[] Snapshot()
     {
-        lock (_gate) return _entries.ToArray();
+        lock (_gate) return [.. _entries];
     }
 
     /// <summary>Последние <paramref name="count"/> записей — для отчёта о зависании.</summary>
     public UciLogEntry[] Tail(int count)
     {
-        lock (_gate) return _entries.Skip(Math.Max(0, _entries.Count - count)).ToArray();
+        lock (_gate) return [.. _entries.Skip(Math.Max(0, _entries.Count - count))];
     }
 
     public void Clear()

@@ -34,7 +34,7 @@ public sealed class RealStockfishTests
         Assert.SkipWhen(path is null, "Настоящий движок не найден (engine/stockfish.exe).");
 
         using var engine = new UciEngine();
-        await engine.StartAsync(path!, TestContext.Current.CancellationToken);
+        await engine.StartAsync(path, TestContext.Current.CancellationToken);
 
         // Бесконечный анализ, как в приложении при включённом «Анализе».
         var analysis = engine.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(),
@@ -48,13 +48,13 @@ public sealed class RealStockfishTests
         await engine.NewGameAsync(TestContext.Current.CancellationToken)
             .WaitAsync(Limit, TestContext.Current.CancellationToken);
         await engine.ApplyOptionsAsync(
-                new[] { new KeyValuePair<string, string>("MultiPV", "2") },
+                [new KeyValuePair<string, string>("MultiPV", "2")],
                 TestContext.Current.CancellationToken)
             .WaitAsync(Limit, TestContext.Current.CancellationToken);
         await analysis.WaitAsync(Limit, TestContext.Current.CancellationToken);
 
         // Движок обязан остаться живым и сходить.
-        var move = await engine.GoAsync(Position.StartFen, new[] { "f2f4" }, SearchLimits.ByTime(300),
+        var move = await engine.GoAsync(Position.StartFen, ["f2f4"], SearchLimits.ByTime(300),
             TestContext.Current.CancellationToken).WaitAsync(Limit, TestContext.Current.CancellationToken);
 
         Assert.False(engine.IsWedged, "движок не завис");
@@ -76,7 +76,7 @@ public sealed class RealStockfishTests
             if (text.StartsWith("> ")) lock (sent) sent.Add(text[2..]);
         };
 
-        await engine.StartAsync(path!, TestContext.Current.CancellationToken);
+        await engine.StartAsync(path, TestContext.Current.CancellationToken);
 
         // Постоянные настройки, как их выставляет приложение при запуске движка.
         await engine.ApplyOptionsAsync(
@@ -88,7 +88,7 @@ public sealed class RealStockfishTests
             TestContext.Current.CancellationToken).WaitAsync(Limit, TestContext.Current.CancellationToken);
 
         var profile = Difficulty.Resolve(DifficultyLevel.Beginner,
-            new DifficultyDefaults(20, false, 1600, 1000, 3));
+            new DifficultyDefaults(20, false, 1600, 1000));
         var eloOption = engine.FindOption("UCI_Elo");
         Assert.NotNull(eloOption);  // настоящий Stockfish объявляет рейтинг
 
@@ -105,7 +105,7 @@ public sealed class RealStockfishTests
             TestContext.Current.CancellationToken).WaitAsync(Limit, TestContext.Current.CancellationToken);
 
         List<string> commands;
-        lock (sent) commands = sent.ToList();
+        lock (sent) commands = [.. sent];
 
         // Рейтинг поджат к объявленному движком минимуму: значение вне диапазона Stockfish
         // молча игнорирует, и ослабления бы не вышло.

@@ -1,36 +1,19 @@
 using ChessEmulator.App;
 using ChessEmulator.UI;
 using Xunit;
+using static ChessEmulator.UiTests.MainFormHarness;
 
 namespace ChessEmulator.UiTests;
 
 /// <summary>Диалог настроек движка — без показа окна.</summary>
 public class EngineSettingsFormTests
 {
-    /// <summary>Выполняет действие, направив файл настроек во временную папку.</summary>
-    private static void WithSettingsFile(Action body)
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "ChessEmulatorTests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        Environment.SetEnvironmentVariable(AppSettings.PathOverrideVariable, Path.Combine(dir, "settings.json"));
-        try
-        {
-            body();
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(AppSettings.PathOverrideVariable, null);
-            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
-        }
-    }
-
     /// <summary>Поле ввода числа, стоящее следом за подписью.</summary>
     private static NumericUpDown Numeric(Control root, string label)
     {
         var all = UiHarness.All(root).ToList();
         var index = all.FindIndex(c => c is Label && c.Text == label);
-        if (index < 0) throw new InvalidOperationException($"Подпись «{label}» не найдена.");
-        return all.Skip(index + 1).OfType<NumericUpDown>().First();
+        return index < 0 ? throw new InvalidOperationException($"Подпись «{label}» не найдена.") : all.Skip(index + 1).OfType<NumericUpDown>().First();
     }
 
     [WinFormsFact(DisplayName = "Настройки движка: значения вне диапазона поджимаются")]
@@ -120,5 +103,44 @@ public class EngineSettingsFormTests
 
             Assert.Equal(5, settings.MultiPv);  // Отмена оставляет прежнее значение
         });
+    }
+
+    [WinFormsFact(DisplayName = "Настройки движка: автопоиск не затирает путь, введённый вручную")]
+    public void АвтопоискНеЗатираетПуть()
+    {
+        // Подставной движок в каталоге из PATH: поиск наверняка что-то находит и на машине без
+        // Stockfish — иначе кнопка показала бы модальное сообщение «движок не найден».
+        var dir = Path.Combine(Path.GetTempPath(), "ChessEmulatorTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var exe = Path.Combine(dir, "stockfish-test.exe");
+        File.WriteAllText(exe, string.Empty);
+
+        var previousPath = Environment.GetEnvironmentVariable("PATH");
+        try
+        {
+            Environment.SetEnvironmentVariable("PATH", $"{dir}{Path.PathSeparator}{previousPath}");
+            const string own = @"C:\свой\движок.exe";
+
+            using var form = new EngineSettingsForm(new AppSettings { EnginePath = own });
+            var path = UiHarness.Find<ComboBox>(form);
+            var detect = UiHarness.ByText<Button>(form, "Найти автоматически");
+            Assert.Equal(own, path.Text);  // путь из настроек важнее найденного
+
+            UiHarness.Press(detect);
+            Assert.Equal(own, path.Text);  // повторный поиск его не трогает
+            Assert.Contains(exe, path.Items.Cast<string>(), StringComparer.OrdinalIgnoreCase);  // находки — в списке
+            Assert.Contains(UiHarness.All(form).OfType<Label>(),
+                label => label.Text == $"Найдено вариантов движка: {path.Items.Count}.");
+
+            // Пустое поле поиск заполняет первым найденным.
+            path.Text = string.Empty;
+            UiHarness.Press(detect);
+            Assert.Equal((string)path.Items[0]!, path.Text);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previousPath);
+            try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
+        }
     }
 }

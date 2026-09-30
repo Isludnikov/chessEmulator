@@ -50,7 +50,7 @@ public sealed class UciEngineBlockingTests
         await engine.NewGameAsync(TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken);
         await infinite.WaitAsync(Short, TestContext.Current.CancellationToken);
 
-        var next = await engine.GoAsync(Position.StartFen, new[] { "e2e4" }, SearchLimits.ByDepth(3),
+        var next = await engine.GoAsync(Position.StartFen, ["e2e4"], SearchLimits.ByDepth(3),
             TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken);
 
         Assert.Equal("e2e4", next.BestMove);  // движок жив и отвечает
@@ -74,11 +74,10 @@ public sealed class UciEngineBlockingTests
         await WaitForSearchAsync(engine);
 
         await engine.ApplyOptionsAsync(
-            new[]
-            {
+            [
                 new KeyValuePair<string, string>("Hash", "32"),
                 new KeyValuePair<string, string>("Такого параметра нет", "1")
-            },
+            ],
             TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken);
         await infinite.WaitAsync(Short, TestContext.Current.CancellationToken);
 
@@ -102,7 +101,7 @@ public sealed class UciEngineBlockingTests
 
         var newGame = engine.NewGameAsync(TestContext.Current.CancellationToken);
         var options = engine.ApplyOptionsAsync(
-            new[] { new KeyValuePair<string, string>("MultiPV", "2") }, TestContext.Current.CancellationToken);
+            [new KeyValuePair<string, string>("MultiPV", "2")], TestContext.Current.CancellationToken);
         var move = engine.GoAsync(Position.StartFen, null, SearchLimits.ByTime(50),
             TestContext.Current.CancellationToken);
 
@@ -170,6 +169,27 @@ public sealed class UciEngineBlockingTests
             engine.NewGameAsync(TestContext.Current.CancellationToken));
     }
 
+    [Fact(DisplayName = "UCI: в зависший движок сырые команды не уходят", Timeout = 30000)]
+    public async Task СырыеКомандыЗависшемуДвижку()
+    {
+        var log = new List<string>();
+        using var engine = await StartAsync("wedge", log);
+        engine.SilenceTimeout = TimeSpan.FromMilliseconds(400);
+        engine.StopTimeout = TimeSpan.FromMilliseconds(300);
+
+        await Assert.ThrowsAsync<EngineUnresponsiveException>(() =>
+            engine.GoAsync(Position.StartFen, null, SearchLimits.AsInfinite(),
+                TestContext.Current.CancellationToken).WaitAsync(Short, TestContext.Current.CancellationToken));
+        Assert.True(engine.IsWedged, "движок помечен как зависший");
+
+        // Процесс снят: ни обычную команду, ни stop с quit писать уже некуда.
+        var before = SentCommands(log).Count;
+        engine.Send("ucinewgame");
+        engine.Send("stop");
+        engine.Send("quit");
+        Assert.Equal(before, SentCommands(log).Count);
+    }
+
     [Fact(DisplayName = "UCI: остановка освобождает движок", Timeout = 30000)]
     public async Task ОстановкаОсвобождаетДвижок()
     {
@@ -189,7 +209,7 @@ public sealed class UciEngineBlockingTests
 
     private static List<string> Timeline(List<string> log)
     {
-        lock (log) return new List<string>(log);
+        lock (log) return [.. log];
     }
 
     [Fact(DisplayName = "UCI: просроченный movetime останавливает поиск", Timeout = 30000)]
@@ -319,6 +339,7 @@ public sealed class UciEngineBlockingTests
         lock (log) before = log.Count(l => l == "< readyok");
         await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
         {
+            // ReSharper disable once AccessToDisposedClosure
             for (var i = 0; i < count / 8; i++) engine.Send("isready");
         }, TestContext.Current.CancellationToken)));
 
@@ -425,9 +446,11 @@ public sealed class UciEngineBlockingTests
     {
         lock (log)
         {
-            return log.Where(l => l.StartsWith("> ", StringComparison.Ordinal))
-                      .Select(l => l[2..])
-                      .ToList();
+            return
+            [
+                .. log.Where(l => l.StartsWith("> ", StringComparison.Ordinal))
+                    .Select(l => l[2..])
+            ];
         }
     }
 }

@@ -14,10 +14,15 @@ public class PgnTests
     [Fact(DisplayName = "PGN: запись")]
     public void Writing()
     {
-        var game = new Game();
-        game.Headers["Event"] = "Проверка";
-        game.Headers["White"] = "Белые";
-        game.Headers["Black"] = "Чёрные";
+        var game = new Game
+        {
+            Headers =
+            {
+                ["Event"] = "Проверка",
+                ["White"] = "Белые",
+                ["Black"] = "Чёрные"
+            }
+        };
         foreach (var san in new[] { "e4", "e5", "Nf3", "Nc6" }) game.TryAddSan(san, out _);
 
         var pgn = Pgn.Write(game);
@@ -29,12 +34,17 @@ public class PgnTests
                                              pgn.IndexOf("[White", StringComparison.Ordinal), "Event идёт раньше White");
 
         // Кавычки и обратные слэши в заголовках экранируются
-        var quoted = new Game();
-        quoted.Headers["White"] = "Игрок \"Ник\"";
-        quoted.Headers["Site"] = @"C:\партии";
+        var quoted = new Game
+        {
+            Headers =
+            {
+                ["White"] = "Игрок \"Ник\"",
+                ["Site"] = @"C:\партии"
+            }
+        };
         var quotedPgn = Pgn.Write(quoted);
         Assert.True(quotedPgn.Contains("[White \"Игрок \\\"Ник\\\"\"]"), "кавычки экранированы");
-        Assert.True(quotedPgn.Contains(@"[Site ""C:\\партии""]"), "обратный слэш экранирован");
+        Assert.True(quotedPgn.Contains("""[Site "C:\\партии"]"""), "обратный слэш экранирован");
         Assert.Equal("Игрок \"Ник\"", Pgn.Read(quotedPgn).Headers["White"]);  // экранирование переживает чтение
         Assert.Equal(@"C:\партии", Pgn.Read(quotedPgn).Headers["Site"]);  // слэш переживает чтение
 
@@ -51,8 +61,13 @@ public class PgnTests
         Assert.True(text.Contains("e5?!"), "знак второго хода записан");
 
         // Нестандартный заголовок тоже попадает в файл
-        var custom = new Game();
-        custom.Headers["Variant"] = "Standard";
+        var custom = new Game
+        {
+            Headers =
+            {
+                ["Variant"] = "Standard"
+            }
+        };
         Assert.True(Pgn.Write(custom).Contains("[Variant \"Standard\"]"), "нестандартный заголовок записан");
 
         // Длинные партии переносятся по строкам
@@ -102,9 +117,9 @@ public class PgnTests
         Assert.Equal("!?", Pgn.Read("1. e4!? *").MainLine()[0].Glyph);  // знак после хода
         Assert.Equal("??", Pgn.Read("1. e4?? *").MainLine()[0].Glyph);  // двойной знак
         (string Nag, string Symbol)[] nags =
-        {
+        [
             ("$1", "!"), ("$2", "?"), ("$3", "!!"), ("$4", "??"), ("$5", "!?"), ("$6", "?!")
-        };
+        ];
         foreach (var (nag, symbol) in nags)
             Assert.Equal(symbol, Pgn.Read($"1. e4 {nag} *").MainLine()[0].Glyph);  // числовой знак {nag}
         Assert.Null(Pgn.Read("1. e4 $99 *").MainLine()[0].Glyph);  // неизвестный числовой знак
@@ -232,8 +247,13 @@ public class PgnTests
     [Fact(DisplayName = "PGN: полный круг")]
     public void RoundTrip()
     {
-        var game = new Game();
-        game.Headers["Event"] = "Круговая проверка";
+        var game = new Game
+        {
+            Headers =
+            {
+                ["Event"] = "Круговая проверка"
+            }
+        };
         game.TryAddSan("e4", out _);
         game.TryAddSan("c5", out var c5);
         c5!.Comment = "Сицилианская защита";

@@ -96,7 +96,7 @@ public sealed class EngineSettingsForm : Form
         _status.ForeColor = Color.DimGray;
         _status.MaximumSize = new Size(360, 0);
         layout.Controls.Add(new Label { Text = string.Empty }, 0, row);
-        layout.Controls.Add(_status, 1, row++);
+        layout.Controls.Add(_status, 1, row);
 
         var buttons = new FlowLayoutPanel
         {

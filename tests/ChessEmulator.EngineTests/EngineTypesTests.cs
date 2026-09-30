@@ -71,9 +71,15 @@ public class EngineTypesTests
     public void BestLineOrder()
     {
         // Строки MultiPV приходят вперемешку, и первая пришедшая — не обязательно лучшая.
-        var result = new SearchResult { BestMove = "e2e4" };
-        result.Lines[3] = new EngineInfo { MultiPv = 3, ScoreCp = -40 };
-        result.Lines[2] = new EngineInfo { MultiPv = 2, ScoreCp = 5 };
+        var result = new SearchResult
+        {
+            BestMove = "e2e4",
+            Lines =
+            {
+                [3] = new EngineInfo { MultiPv = 3, ScoreCp = -40 },
+                [2] = new EngineInfo { MultiPv = 2, ScoreCp = 5 }
+            }
+        };
 
         Assert.Equal(2, result.Best!.MultiPv);  // без первой линии берём следующую по номеру
 

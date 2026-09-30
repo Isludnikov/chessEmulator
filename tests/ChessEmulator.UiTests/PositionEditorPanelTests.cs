@@ -25,6 +25,7 @@ public class PositionEditorPanelTests
     {
         using var panel = NewPanel();
         var changes = 0;
+        // ReSharper disable once AccessToModifiedClosure
         panel.PositionChanged += (_, _) => changes++;
 
         Assert.Equal(Position.StartFen, panel.Builder.ToFen());  // загружена начальная позиция
@@ -70,6 +71,7 @@ public class PositionEditorPanelTests
         UiHarness.FindButton(panel, "Очистить доску").PerformClick();
         Assert.Equal("8/8/8/8/8/8/8/8 w - - 0 1", panel.Builder.ToFen());  // кнопка очищает доску
 
+        // ReSharper disable once AccessToDisposedClosure
         Assert.Null(Record.Exception(() => UiHarness.Render(panel).Dispose()));  // панель рисуется
     }
 
@@ -179,6 +181,7 @@ public class PositionEditorPanelTests
         Assert.Equal("P", palette.Selected.ToFenChar().ToString());  // по умолчанию выбрана белая пешка
 
         var changes = 0;
+        // ReSharper disable once AccessToModifiedClosure
         palette.SelectionChanged += (_, _) => changes++;
         palette.Selected = new Piece(PieceColor.Black, PieceType.Knight);
         Assert.Equal("n", panel.Brush.ToFenChar().ToString());  // выбор передан панели
@@ -207,5 +210,34 @@ public class PositionEditorPanelTests
         Assert.Equal("k", palette.Selected.ToFenChar().ToString());  // во втором ряду чёрные фигуры
 
         Assert.Null(Record.Exception(() => UiHarness.Render(palette).Dispose()));  // палитра рисуется
+    }
+
+    [WinFormsFact(DisplayName = "Редактор: фигура палитры под курсором подсвечена")]
+    public void PaletteHover()
+    {
+        using var panel = NewPanel();
+        var palette = UiHarness.Find<PiecePalette>(panel);
+        palette.ClientSize = new Size(330, 110);
+        using var plain = UiHarness.Render(palette);
+
+        var cell = palette.ClientSize.Width / 7;
+        var whiteQueen = new Point(cell + cell / 2, cell / 2);
+        var underEraser = new Point(cell * 6 + cell / 2, cell + cell / 2);  // ластик один, под ним пусто
+
+        UiHarness.MouseMove(palette, whiteQueen, MouseButtons.None);
+        using var hovered = UiHarness.Render(palette);
+        Assert.True(UiHarness.Difference(plain, hovered) > 200, "фигура под курсором подсвечена");
+        Assert.Equal(Cursors.Hand, palette.Cursor);  // и курсор показывает, что её можно выбрать
+        Assert.Equal("P", palette.Selected.ToFenChar().ToString());  // наведение выбор не меняет
+
+        UiHarness.MouseMove(palette, underEraser, MouseButtons.None);
+        using var away = UiHarness.Render(palette);
+        Assert.Equal(0, UiHarness.Difference(plain, away));  // мимо фигур подсветки нет
+        Assert.Equal(Cursors.Default, palette.Cursor);
+
+        UiHarness.MouseMove(palette, whiteQueen, MouseButtons.None);
+        UiHarness.MouseLeave(palette);
+        using var left = UiHarness.Render(palette);
+        Assert.Equal(0, UiHarness.Difference(plain, left));  // курсор ушёл — подсветка погасла
     }
 }

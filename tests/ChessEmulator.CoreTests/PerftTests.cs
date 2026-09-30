@@ -14,7 +14,7 @@ public class PerftTests
     public sealed record Case(string Name, string Fen, int Depth, long Nodes, bool Slow = false);
 
     private static readonly Case[] Cases =
-    {
+    [
         // Классические позиции
         new("начальная, глубина 1", Position.StartFen, 1, 20),
         new("начальная, глубина 2", Position.StartFen, 2, 400),
@@ -67,7 +67,7 @@ public class PerftTests
         new("превращение уходом из-под шаха, глубина 6", "2K2r2/4P3/8/8/8/8/8/3k4 w - - 0 1", 6, 3821001, Slow: true),
         new("вскрытый шах, глубина 5", "8/8/1P2K3/8/2n5/1q6/8/5k2 b - - 0 1", 5, 1004658, Slow: true),
         new("пат и мат рядом, глубина 7", "8/k1P5/8/1K6/8/8/8/8 w - - 0 1", 7, 567584, Slow: true)
-    };
+    ];
 
     public const string Kiwipete = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
     public const string Pos3 = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1";
@@ -82,9 +82,7 @@ public class PerftTests
         var moves = position.LegalMoves;
         if (depth == 1) return moves.Count;
 
-        long total = 0;
-        foreach (var move in moves) total += Perft(position.MakeMove(move), depth - 1);
-        return total;
+        return moves.Sum(move => Perft(position.MakeMove(move), depth - 1));
     }
 
     /// <summary>

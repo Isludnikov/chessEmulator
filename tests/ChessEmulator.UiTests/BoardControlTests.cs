@@ -127,7 +127,7 @@ public class BoardControlTests
     public void Playing()
     {
         using var board = NewBoard(Position.StartFen);
-        var moves = new List<Chess.Move>();
+        var moves = new List<Move>();
         board.MoveMade += (_, e) => moves.Add(e.Move);
 
         // Щёлкнул фигуру — щёлкнул клетку
@@ -168,7 +168,7 @@ public class BoardControlTests
 
         // Превращение пешки
         using var promo = NewBoard("8/P6k/8/8/8/8/8/4K3 w - - 0 1");
-        var promoted = new List<Chess.Move>();
+        var promoted = new List<Move>();
         var asked = 0;
         promo.MoveMade += (_, e) => promoted.Add(e.Move);
         promo.PromotionNeeded += (_, e) => { asked++; e.Selected = PieceType.Rook; };
@@ -228,13 +228,13 @@ public class BoardControlTests
 
         // Подсветка последнего хода
         using var highlighted = NewBoard(Position.StartFen);
-        highlighted.LastMove = Chess.Move.FromUci("e2e4");
+        highlighted.LastMove = Move.FromUci("e2e4");
         using var highlightedImage = UiHarness.Render(highlighted);
         Assert.True(UiHarness.Difference(startImage, highlightedImage) > 100, "последний ход подсвечен");
 
         // Стрелки
         using var arrows = NewBoard(Position.StartFen);
-        arrows.SetArrows(new[] { new BoardArrow(Sq.Parse("e2"), Sq.Parse("e4"), Color.LimeGreen) });
+        arrows.SetArrows([new BoardArrow(Sq.Parse("e2"), Sq.Parse("e4"), Color.LimeGreen)]);
         using var arrowImage = UiHarness.Render(arrows);
         Assert.True(UiHarness.Difference(startImage, arrowImage) > 500, "стрелка нарисована");
 
@@ -335,7 +335,7 @@ public class BoardControlTests
         using var board = NewBoard(Position.StartFen);
         var dismissed = 0;
         board.ResultBannerDismissed += (_, _) => dismissed++;
-        var moves = new List<Chess.Move>();
+        var moves = new List<Move>();
         board.MoveMade += (_, e) => moves.Add(e.Move);
 
         using var plain = UiHarness.Render(board);

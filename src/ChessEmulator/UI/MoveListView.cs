@@ -20,7 +20,7 @@ public sealed class MoveListView : Panel
 
     private enum TokenKind { MoveNumber, San, Bracket, Comment, Eval, Glyph }
 
-    private readonly List<Token> _tokens = new();
+    private readonly List<Token> _tokens = [];
     private Game? _game;
     private bool _layoutDirty = true;
     private Token? _hot;
@@ -120,7 +120,7 @@ public sealed class MoveListView : Panel
             var font = FontFor(token);
             var color = ColorFor(token);
 
-            if (token.Kind == TokenKind.San && token.Node != null)
+            if (token is { Kind: TokenKind.San, Node: not null })
             {
                 if (token.Node == current)
                 {
@@ -196,7 +196,7 @@ public sealed class MoveListView : Panel
             var size = g.MeasureString(token.Text, font, int.MaxValue, StringFormat.GenericTypographic);
             size.Width += 6;
 
-            var startsVariation = token.Kind == TokenKind.Bracket && token.Text == "(";
+            var startsVariation = token is { Kind: TokenKind.Bracket, Text: "(" };
             var backToMain = token.Depth == 0 && previousDepth > 0;
 
             if ((x + size.Width > maxWidth && x > Padding.Left) || (startsVariation && x > Padding.Left) || backToMain)
@@ -301,7 +301,7 @@ public sealed class MoveListView : Panel
         var point = new PointF(location.X - AutoScrollPosition.X, location.Y - AutoScrollPosition.Y);
         foreach (var token in _tokens)
         {
-            if (token.Kind == TokenKind.San && token.Node != null && Inflate(token.Bounds).Contains(point))
+            if (token is { Kind: TokenKind.San, Node: not null } && Inflate(token.Bounds).Contains(point))
                 return token;
         }
         return null;

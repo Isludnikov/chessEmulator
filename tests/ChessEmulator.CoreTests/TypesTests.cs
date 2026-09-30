@@ -63,8 +63,21 @@ public class TypesTests
         Assert.False(new Piece(PieceColor.White, PieceType.Rook).Is(PieceColor.Black, PieceType.Rook), "Is различает цвет");
         Assert.False(Piece.Empty.Is(PieceColor.White, PieceType.Pawn), "пустая фигура не Is");
         Assert.True(Piece.FromFenChar('x').IsEmpty, "неизвестный символ даёт пусто");
+        // ReSharper disable once EqualExpressionComparison
         Assert.True(new Piece(PieceColor.White, PieceType.Queen) == new Piece(PieceColor.White, PieceType.Queen), "равенство по значению");
         Assert.True(new Piece(PieceColor.White, PieceType.Queen) != new Piece(PieceColor.Black, PieceType.Queen), "неравенство разных цветов");
+
+        // Равенство через object и хеш: на них держатся множества и словари с фигурами.
+        var queen = new Piece(PieceColor.White, PieceType.Queen);
+        object sameQueen = new Piece(PieceColor.White, PieceType.Queen);
+        object queenLetter = "Q";
+        Assert.True(queen.Equals(sameQueen), "Equals(object) сравнивает по значению");
+        Assert.False(queen.Equals(queenLetter), "фигура не равна постороннему объекту");
+        Assert.Equal(queen.GetHashCode(), sameQueen.GetHashCode());  // одинаковый хеш у равных фигур
+        Assert.Single(new HashSet<Piece> { queen, new(PieceColor.White, PieceType.Queen) });  // в множестве не двоится
+
+        // Байт с несуществующим типом фигуры не роняет запись FEN.
+        Assert.Equal('.', new Piece(7).ToFenChar());
     }
 
     [Fact(DisplayName = "Типы: ходы")]
@@ -95,5 +108,9 @@ public class TypesTests
         Assert.True(a != c, "превращение различает ходы");
         Assert.Equal(a.GetHashCode(), b.GetHashCode());  // одинаковый хеш у равных ходов
         Assert.True(a.GetHashCode() != c.GetHashCode(), "хеши разных ходов различаются");
+        object sameMove = b;
+        object moveText = "e2e4";
+        Assert.True(a.Equals(sameMove), "Equals(object) сравнивает по значению");
+        Assert.False(a.Equals(moveText), "ход не равен своей записи строкой");
     }
 }

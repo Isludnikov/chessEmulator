@@ -16,9 +16,9 @@ public class PromotionDialogTests
     public void Выбор()
     {
         (int Index, PieceType Expected)[] cases =
-        {
+        [
             (0, PieceType.Queen), (1, PieceType.Rook), (2, PieceType.Bishop), (3, PieceType.Knight)
-        };
+        ];
 
         foreach (var (index, expected) in cases)
         {
@@ -61,11 +61,11 @@ public class PromotionDialogTests
     public void Клавиатура()
     {
         (Keys Key, PieceType Expected)[] cases =
-        {
+        [
             (Keys.Q, PieceType.Queen), (Keys.R, PieceType.Rook),
             (Keys.B, PieceType.Bishop), (Keys.N, PieceType.Knight),
             (Keys.Enter, PieceType.Queen)
-        };
+        ];
 
         foreach (var (key, expected) in cases)
         {
@@ -97,5 +97,25 @@ public class PromotionDialogTests
             Assert.True(UiHarness.InkFraction(image, cell, background) > 0.05,
                 $"в клетке {i} нарисована фигура");
         }
+    }
+
+    [WinFormsFact(DisplayName = "Превращение: фигура под курсором подсвечена")]
+    public void Подсветка()
+    {
+        using var dialog = new PromotionDialog(PieceColor.White);
+        using var plain = UiHarness.Render(dialog);
+
+        UiHarness.MouseMove(dialog, Center(2), MouseButtons.None);
+        using var hovered = UiHarness.Render(dialog);
+        var cell = new Rectangle(2 * Cell, 0, Cell, Cell);
+        Assert.True(UiHarness.Difference(plain, hovered, cell) > 500, "клетка под курсором перекрашена");
+        // Перекрашена только она; сглаживание задевает по пикселю от соседних клеток.
+        Assert.Equal(UiHarness.Difference(plain, hovered),
+            UiHarness.Difference(plain, hovered, Rectangle.Inflate(cell, 1, 1)));
+
+        // Курсор ушёл ниже фигур — подсветка погасла.
+        UiHarness.MouseMove(dialog, new Point(Cell / 2, Cell + 20), MouseButtons.None);
+        using var away = UiHarness.Render(dialog);
+        Assert.Equal(0, UiHarness.Difference(plain, away));
     }
 }

@@ -12,7 +12,7 @@ public class PositionTests
     public void Fen()
     {
         string[] samples =
-        {
+        [
             Position.StartFen,
             PerftTests.Kiwipete,
             PerftTests.Pos3,
@@ -22,10 +22,8 @@ public class PositionTests
             "8/8/8/8/8/8/8/8 w - - 0 1",
             "4k3/8/8/3pP3/8/8/8/4K3 w - d6 13 42",
             "r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 99 250"
-        };
-        var mismatches = 0;
-        foreach (var fen in samples)
-            if (Position.FromFen(fen).ToFen() != fen) mismatches++;
+        ];
+        var mismatches = samples.Count(fen => Position.FromFen(fen).ToFen() != fen);
         Assert.Equal(0, mismatches);  // полный круг FEN на девяти позициях
 
         var pos = Position.FromFen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 13 42");
@@ -205,6 +203,7 @@ public class PositionTests
         Assert.Equal(Position.StartFen, start.ToFen());  // исходная позиция не изменилась
         Assert.Equal(before, start.LegalMoves.Count);  // исходный список ходов не изменился
         Assert.True(next.ToFen() != start.ToFen(), "новая позиция отличается");
+        // ReSharper disable once EqualExpressionComparison
         Assert.True(ReferenceEquals(start.LegalMoves, start.LegalMoves), "список ходов кэшируется");
 
         var clone = start.Clone();
@@ -346,7 +345,7 @@ public class PositionTests
     public void Material()
     {
         (string Fen, bool Insufficient, string Name)[] cases =
-        {
+        [
             ("4k3/8/8/8/8/8/8/4K3 w - - 0 1", true, "король против короля"),
             ("4k3/8/8/8/8/8/8/4KN2 w - - 0 1", true, "король с конём"),
             ("4k3/8/8/8/8/8/8/4KB2 w - - 0 1", true, "король со слоном"),
@@ -357,7 +356,7 @@ public class PositionTests
             ("4k3/8/8/8/8/8/8/R3K3 w - - 0 1", false, "есть ладья"),
             ("4k3/8/8/8/8/8/8/3QK3 w - - 0 1", false, "есть ферзь"),
             (Position.StartFen, false, "начальная позиция")
-        };
+        ];
         foreach (var c in cases)
             Assert.Equal(c.Insufficient, Position.FromFen(c.Fen).HasInsufficientMaterial());
 

@@ -8,9 +8,9 @@ namespace ChessEmulator.UI;
 public sealed class PromotionDialog : Form
 {
     private static readonly PieceType[] Choices =
-    {
+    [
         PieceType.Queen, PieceType.Rook, PieceType.Bishop, PieceType.Knight
-    };
+    ];
 
     private readonly PieceColor _color;
     private int _hovered = -1;

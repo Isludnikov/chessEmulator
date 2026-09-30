@@ -7,10 +7,10 @@ namespace ChessEmulator.UI;
 internal sealed class PiecePalette : Control
 {
     private static readonly PieceType[] Order =
-    {
+    [
         PieceType.King, PieceType.Queen, PieceType.Rook,
         PieceType.Bishop, PieceType.Knight, PieceType.Pawn
-    };
+    ];
 
     private Piece _selected = new(PieceColor.White, PieceType.Pawn);
     private int _hovered = -1;
@@ -53,8 +53,8 @@ internal sealed class PiecePalette : Control
     {
         var col = index % Columns;
         var row = index / Columns;
-        if (col >= Order.Length) return Piece.Empty;   // ластик
-        return new Piece(row == 0 ? PieceColor.White : PieceColor.Black, Order[col]);
+        return col >= Order.Length ? Piece.Empty : // ластик
+            new Piece(row == 0 ? PieceColor.White : PieceColor.Black, Order[col]);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -139,10 +139,9 @@ internal sealed class PiecePalette : Control
     }
 }
 
-public sealed class PositionAppliedEventArgs : EventArgs
+public sealed class PositionAppliedEventArgs(string fen) : EventArgs
 {
-    public PositionAppliedEventArgs(string fen) => Fen = fen;
-    public string Fen { get; }
+    public string Fen { get; } = fen;
 }
 
 /// <summary>

@@ -4,13 +4,13 @@ namespace ChessEmulator.Engine;
 public static class EngineLocator
 {
     private static readonly string[] Names =
-    {
+    [
         "stockfish.exe",
         "stockfish-windows-x86-64-avx2.exe",
         "stockfish-windows-x86-64-bmi2.exe",
         "stockfish-windows-x86-64-sse41-popcnt.exe",
         "stockfish-windows-x86-64.exe"
-    };
+    ];
 
     /// <summary>Возвращает все найденные варианты движка (без повторов).</summary>
     public static List<string> FindAll()
@@ -32,19 +32,12 @@ public static class EngineLocator
                 continue;
             }
 
-            foreach (var name in Names)
-            {
-                var path = Path.Combine(info.FullName, name);
-                if (File.Exists(path) && seen.Add(path)) found.Add(path);
-            }
+            found.AddRange(Names.Select(name => Path.Combine(info.FullName, name)).Where(path => File.Exists(path) && seen.Add(path)));
 
             // Файлы вида stockfish*.exe в каталоге
             try
             {
-                foreach (var file in info.EnumerateFiles("stockfish*.exe"))
-                {
-                    if (seen.Add(file.FullName)) found.Add(file.FullName);
-                }
+                found.AddRange(from file in info.EnumerateFiles("stockfish*.exe") where seen.Add(file.FullName) select file.FullName);
             }
             catch
             {
@@ -67,7 +60,7 @@ public static class EngineLocator
 
         // Каталоги рядом с исходниками (удобно при запуске из IDE)
         var dir = new DirectoryInfo(appDir);
-        for (var i = 0; i < 5 && dir?.Parent != null; i++)
+        for (var i = 0; i < 5 && dir.Parent != null; i++)
         {
             dir = dir.Parent;
             yield return Path.Combine(dir.FullName, "engine");

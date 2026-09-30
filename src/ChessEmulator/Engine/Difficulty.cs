@@ -13,7 +13,7 @@ public enum DifficultyLevel
 
 /// <summary>Ручные настройки силы: ими пользуются уровни «Максимум» и «Своя».</summary>
 public readonly record struct DifficultyDefaults(
-    int SkillLevel, bool LimitStrength, int EloRating, int MoveTimeMs, int MultiPv);
+    int SkillLevel, bool LimitStrength, int EloRating, int MoveTimeMs);
 
 /// <summary>
 /// Как соперник ослабляется на один свой ход. Всё ослабление живёт только внутри хода
@@ -72,9 +72,9 @@ public sealed record DifficultyProfile
 public static class Difficulty
 {
     /// <summary>Уровни в порядке показа: индекс в списке равен индексу в выпадающем списке.</summary>
-    public static IReadOnlyList<DifficultyProfile> All { get; } = new[]
-    {
-        new DifficultyProfile
+    public static IReadOnlyList<DifficultyProfile> All { get; } =
+    [
+        new()
         {
             Level = DifficultyLevel.Beginner,
             Title = "Новичок",
@@ -89,7 +89,7 @@ public static class Difficulty
             RandomMoveChance = 0.12,
             MinThinkMs = 350
         },
-        new DifficultyProfile
+        new()
         {
             Level = DifficultyLevel.Amateur,
             Title = "Любитель",
@@ -104,7 +104,7 @@ public static class Difficulty
             RandomMoveChance = 0.05,
             MinThinkMs = 350
         },
-        new DifficultyProfile
+        new()
         {
             Level = DifficultyLevel.Club,
             Title = "Клубный",
@@ -119,7 +119,7 @@ public static class Difficulty
             RandomMoveChance = 0.015,
             MinThinkMs = 300
         },
-        new DifficultyProfile
+        new()
         {
             Level = DifficultyLevel.Expert,
             Title = "Эксперт",
@@ -134,19 +134,19 @@ public static class Difficulty
             RandomMoveChance = 0,
             MinThinkMs = 250
         },
-        new DifficultyProfile
+        new()
         {
             Level = DifficultyLevel.Maximum,
             Title = "Максимум",
             Hint = "Движок на полной силе"
         },
-        new DifficultyProfile
+        new()
         {
             Level = DifficultyLevel.Custom,
             Title = "Своя",
             Hint = "По полям в настройках движка"
         }
-    };
+    ];
 
     /// <summary>Профиль уровня. Неизвестный уровень — полная сила: ослабление должно быть осознанным.</summary>
     public static DifficultyProfile For(DifficultyLevel level)
@@ -230,10 +230,10 @@ public static class Difficulty
     /// Возврат к полной силе после хода соперника. Рейтинг не сбрасываем: снятый
     /// UCI_LimitStrength делает залежавшееся значение безвредным.
     /// </summary>
-    public static List<KeyValuePair<string, string>> FullStrengthOptions(int multiPv) => new()
-    {
+    public static List<KeyValuePair<string, string>> FullStrengthOptions(int multiPv) =>
+    [
         new("MultiPV", Math.Max(1, multiPv).ToString()),
         new("Skill Level", "20"),
         new("UCI_LimitStrength", "false")
-    };
+    ];
 }

@@ -4,10 +4,10 @@ namespace ChessEmulator.Chess;
 public sealed class MoveNode
 {
     public MoveNode? Parent { get; internal set; }
-    public List<MoveNode> Children { get; } = new();
+    public List<MoveNode> Children { get; } = [];
 
-    public Move Move { get; init; }
-    public string San { get; init; } = string.Empty;
+    public Move Move { get; private init; }
+    public string San { get; private init; } = string.Empty;
     public required Position Position { get; init; }
 
     /// <summary>Полуход от начала партии (0 — стартовая позиция).</summary>
@@ -55,7 +55,7 @@ public sealed class MoveNode
     public IEnumerable<MoveNode> PathFromRoot()
     {
         var stack = new Stack<MoveNode>();
-        for (var n = this; n != null && !n.IsRoot; n = n.Parent) stack.Push(n);
+        for (var n = this; n is { IsRoot: false }; n = n.Parent) stack.Push(n);
         return stack;
     }
 }
@@ -99,7 +99,7 @@ public sealed class Game
     {
         // Позицию разбираем до того, как что-то менять: на неверном FEN Reset бросает
         // исключение, и партия должна остаться прежней, а не наполовину сброшенной.
-        var requested = string.IsNullOrWhiteSpace(fen) ? Position.StartFen : fen!.Trim();
+        var requested = string.IsNullOrWhiteSpace(fen) ? Position.StartFen : fen.Trim();
         var start = Position.FromFen(requested);
 
         StartFen = requested;
@@ -254,9 +254,7 @@ public sealed class Game
     /// <summary>Ходы от корня до текущего узла в формате UCI — для команды position.</summary>
     public List<string> UciMovesToCurrent()
     {
-        var moves = new List<string>();
-        foreach (var node in Current.PathFromRoot()) moves.Add(node.Move.ToUci());
-        return moves;
+        return [.. Current.PathFromRoot().Select(node => node.Move.ToUci())];
     }
 
     // -------------------------------------------------- Определение результата
@@ -289,8 +287,7 @@ public sealed class Game
 
         if (pos.HasInsufficientMaterial()) return (GameResultState.Draw, GameEndReason.InsufficientMaterial);
         if (pos.HalfmoveClock >= 100) return (GameResultState.Draw, GameEndReason.FiftyMoveRule);
-        if (IsThreefoldRepetition(node)) return (GameResultState.Draw, GameEndReason.ThreefoldRepetition);
-        return (GameResultState.InProgress, GameEndReason.None);
+        return IsThreefoldRepetition(node) ? (GameResultState.Draw, GameEndReason.ThreefoldRepetition) : (GameResultState.InProgress, GameEndReason.None);
     }
 
     /// <summary>Результат, который мы посчитали сами: его можно снять, чужой — нет.</summary>
@@ -321,18 +318,10 @@ public sealed class Game
             return;
         }
 
-        var recorded = Headers.TryGetValue("Result", out var r) ? r : null;
-        if (_computedResult != null && recorded == _computedResult) Headers["Result"] = "*";
-        else if (recorded == null) Headers["Result"] = "*";
+        var recorded = Headers.GetValueOrDefault("Result");
+        if ((_computedResult != null && recorded == _computedResult) || recorded == null) Headers["Result"] = "*";
         _computedResult = null;
     }
 
     public void OnChanged() => Changed?.Invoke(this, EventArgs.Empty);
-
-    internal void SetRoot(MoveNode root, string startFen)
-    {
-        Root = root;
-        StartFen = startFen;
-        Current = root;
-    }
 }

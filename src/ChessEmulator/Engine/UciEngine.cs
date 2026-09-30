@@ -18,7 +18,7 @@ public sealed class UciEngine : IDisposable
 {
     private static readonly Encoding NoBomUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
-    private SynchronizationContext? _sync;
+    private SynchronizationContext? _sync = SynchronizationContext.Current;
 
     /// <summary>Очередь желающих поговорить с движком: гасить чужой поиск можно только по одному.</summary>
     private readonly SemaphoreSlim _turnstile = new(1, 1);
@@ -46,12 +46,10 @@ public sealed class UciEngine : IDisposable
     private long _readyAnswered;
     private long _readyAwaited;
 
-    public UciEngine() => _sync = SynchronizationContext.Current;
-
     public string ExecutablePath { get; private set; } = string.Empty;
     public string Name { get; private set; } = "—";
     public string Author { get; private set; } = string.Empty;
-    public List<UciOption> Options { get; } = new();
+    public List<UciOption> Options { get; } = [];
     public bool IsRunning
     {
         get
@@ -98,14 +96,12 @@ public sealed class UciEngine : IDisposable
 
     private long _searchCounter;
 
-    private sealed class SearchState
+    private sealed class SearchState(long id)
     {
         private long _lastOutput = Environment.TickCount64;
 
-        public SearchState(long id) => Id = id;
-
         /// <summary>Номер поиска: им помечаются строки info (<see cref="EngineInfo.SearchId"/>).</summary>
-        public long Id { get; }
+        public long Id { get; } = id;
 
         public TaskCompletionSource<SearchResult> Tcs { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -128,13 +124,10 @@ public sealed class UciEngine : IDisposable
     }
 
     /// <summary>Право писать в движок. Освобождается через using.</summary>
-    private readonly struct Lease : IDisposable
+    private readonly struct Lease(UciEngine engine) : IDisposable
     {
-        private readonly UciEngine _engine;
-        public Lease(UciEngine engine) => _engine = engine;
-
         // Семафоры никогда не освобождаются (см. UciEngine.Dispose), поэтому Release всегда безопасен.
-        public void Dispose() => _engine._owner.Release();
+        public void Dispose() => engine._owner.Release();
     }
 
     // -------------------------------------------------------------- Запуск
@@ -404,7 +397,7 @@ public sealed class UciEngine : IDisposable
 
         // Только после go: отмена, пришедшая раньше, отправила бы stop в пустоту, и поиск
         // шёл бы дальше как ни в чём не бывало. Уже отменённый токен сработает прямо здесь.
-        using var registration = ct.Register(() =>
+        await using var registration = ct.Register(() =>
         {
             state.MarkStopSent();
             Send("stop");
@@ -579,7 +572,7 @@ public sealed class UciEngine : IDisposable
             if (info == null) return;
             info.SearchId = current?.Id ?? 0;
 
-            if (current != null && !current.Completed && info.Pv.Length > 0) current.Result.Lines[info.MultiPv] = info;
+            if (current is { Completed: false } && info.Pv.Length > 0) current.Result.Lines[info.MultiPv] = info;
 
             Post(() => InfoReceived?.Invoke(this, info));
             return;
@@ -712,7 +705,7 @@ public sealed class UciEngine : IDisposable
                     }
                     break;
                 case "pv":
-                    info.Pv = tokens.Skip(i + 1).ToArray();
+                    info.Pv = [.. tokens.Skip(i + 1)];
                     i = tokens.Length;
                     any = true;
                     break;

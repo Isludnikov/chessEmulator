@@ -32,11 +32,11 @@ public static class PieceRenderer
 
         using var art = Build(piece.Type, rect);
 
-        bool white = piece.Color == PieceColor.White;
+        var white = piece.Color == PieceColor.White;
         var fill = white ? Color.FromArgb(252, 252, 250) : Color.FromArgb(32, 32, 34);
         var outline = white ? Color.FromArgb(28, 28, 30) : Color.FromArgb(232, 232, 232);
 
-        float scale = Math.Min(rect.Width, rect.Height) * Fit / Design;
+        var scale = Math.Min(rect.Width, rect.Height) * Fit / Design;
         using var pen = new Pen(outline, Math.Max(1f, scale * 2.4f))
         {
             LineJoin = LineJoin.Round,
@@ -88,7 +88,7 @@ public static class PieceRenderer
 
     private static Matrix FitTransform(Rectangle rect)
     {
-        float scale = Math.Min(rect.Width, rect.Height) * Fit / Design;
+        var scale = Math.Min(rect.Width, rect.Height) * Fit / Design;
         var matrix = new Matrix();
         matrix.Translate(
             rect.X + (rect.Width - Design * scale) / 2f,

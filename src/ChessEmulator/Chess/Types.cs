@@ -92,8 +92,8 @@ public static class Sq
     public static int File(int square) => square & 7;
     public static int Rank(int square) => square >> 3;
     public static int Of(int file, int rank) => (rank << 3) | file;
-    public static bool IsValid(int square) => square >= 0 && square < 64;
-    public static bool IsValid(int file, int rank) => file >= 0 && file < 8 && rank >= 0 && rank < 8;
+    public static bool IsValid(int square) => square is >= 0 and < 64;
+    public static bool IsValid(int file, int rank) => file is >= 0 and < 8 && rank is >= 0 and < 8;
 
     public static string Name(int square) =>
         IsValid(square) ? $"{(char)('a' + File(square))}{(char)('1' + Rank(square))}" : "-";
@@ -108,18 +108,11 @@ public static class Sq
 }
 
 /// <summary>Ход: откуда, куда и (при превращении) новая фигура.</summary>
-public readonly struct Move : IEquatable<Move>
+public readonly struct Move(int from, int to, PieceType promotion = PieceType.None) : IEquatable<Move>
 {
-    public readonly int From;
-    public readonly int To;
-    public readonly PieceType Promotion;
-
-    public Move(int from, int to, PieceType promotion = PieceType.None)
-    {
-        From = from;
-        To = to;
-        Promotion = promotion;
-    }
+    public readonly int From = from;
+    public readonly int To = to;
+    public readonly PieceType Promotion = promotion;
 
     public static readonly Move None = new(0, 0);
 

@@ -12,10 +12,10 @@ namespace ChessEmulator.UiTests;
 public class PieceRendererTests
 {
     private static readonly PieceType[] Types =
-    {
+    [
         PieceType.King, PieceType.Queen, PieceType.Rook,
         PieceType.Bishop, PieceType.Knight, PieceType.Pawn
-    };
+    ];
 
     private static readonly Color Background = Color.FromArgb(240, 217, 181);
     private static readonly Rectangle Cell = new(0, 0, 96, 96);
@@ -32,8 +32,8 @@ public class PieceRendererTests
         });
 
         // Все фигуры стоят на одной линии — основания выровнены
-        int lowest = bounds.Values.Min(b => b.Bottom);
-        int highestBottom = bounds.Values.Max(b => b.Bottom);
+        var lowest = bounds.Values.Min(b => b.Bottom);
+        var highestBottom = bounds.Values.Max(b => b.Bottom);
         Assert.True(highestBottom - lowest <= 2, $"основания на одной линии (разброс {highestBottom - lowest} px)");
 
         // Высоты выстроены по старшинству фигур
@@ -49,7 +49,7 @@ public class PieceRendererTests
         foreach (var type in Types)
         {
             var box = bounds[type];
-            int center = box.Left + box.Width / 2;
+            var center = box.Left + box.Width / 2;
             Assert.True(Math.Abs(center - Cell.Width / 2) <= 4, $"{type}: фигура по центру клетки (центр {center})");
             Assert.True(Cell.Contains(box), $"{type}: фигура не выходит за клетку");
             Assert.True(box.Height > Cell.Height * 0.55, $"{type}: фигура занимает клетку по высоте");
@@ -59,11 +59,11 @@ public class PieceRendererTests
         // Симметричные фигуры и конь в профиль
         foreach (var type in new[] { PieceType.King, PieceType.Queen, PieceType.Rook, PieceType.Pawn })
         {
-            double skew = Mirror(type);
+            var skew = Mirror(type);
             Assert.True(skew < 0.03, $"{type}: фигура симметрична ({skew:P1})");
         }
 
-        double knight = Mirror(PieceType.Knight);
+        var knight = Mirror(PieceType.Knight);
         Assert.True(knight > 0.06, $"конь нарисован в профиль ({knight:P1})");
     }
 
@@ -82,15 +82,15 @@ public class PieceRendererTests
         var images = Types.ToDictionary(t => t, t => Draw(new Piece(PieceColor.White, t), Cell, Background));
         try
         {
-            int tooSimilar = 0;
-            int worst = int.MaxValue;
-            string worstPair = "";
+            var tooSimilar = 0;
+            var worst = int.MaxValue;
+            var worstPair = "";
 
-            for (int i = 0; i < Types.Length; i++)
+            for (var i = 0; i < Types.Length; i++)
             {
-                for (int j = i + 1; j < Types.Length; j++)
+                for (var j = i + 1; j < Types.Length; j++)
                 {
-                    int diff = UiHarness.Difference(images[Types[i]], images[Types[j]]);
+                    var diff = UiHarness.Difference(images[Types[i]], images[Types[j]]);
                     if (diff < 400) tooSimilar++;
                     if (diff < worst)
                     {
@@ -100,18 +100,18 @@ public class PieceRendererTests
                 }
             }
 
-            // все шесть фигур отличаются друг от друга (ближайшие — {worstPair}, {worst} px)
-            Assert.Equal(0, tooSimilar);
+            Assert.True(tooSimilar == 0,
+                $"все шесть фигур отличаются друг от друга (ближайшие — {worstPair}, {worst} px)");
 
             // Мелкий размер: фигуры должны различаться и на маленькой доске
             var small = new Rectangle(0, 0, 20, 20);
             var tiny = Types.ToDictionary(t => t, t => Draw(new Piece(PieceColor.White, t), small, Background));
             try
             {
-                int tinySimilar = 0;
-                for (int i = 0; i < Types.Length; i++)
+                var tinySimilar = 0;
+                for (var i = 0; i < Types.Length; i++)
                 {
-                    for (int j = i + 1; j < Types.Length; j++)
+                    for (var j = i + 1; j < Types.Length; j++)
                     {
                         if (UiHarness.Difference(tiny[Types[i]], tiny[Types[j]]) < 12) tinySimilar++;
                     }
@@ -139,10 +139,10 @@ public class PieceRendererTests
     private static double Brightness(Bitmap bitmap)
     {
         double sum = 0;
-        int count = 0;
-        for (int y = bitmap.Height / 3; y < bitmap.Height * 2 / 3; y++)
+        var count = 0;
+        for (var y = bitmap.Height / 3; y < bitmap.Height * 2 / 3; y++)
         {
-            for (int x = bitmap.Width / 3; x < bitmap.Width * 2 / 3; x++)
+            for (var x = bitmap.Width / 3; x < bitmap.Width * 2 / 3; x++)
             {
                 sum += bitmap.GetPixel(x, y).GetBrightness() * 255;
                 count++;
@@ -163,8 +163,8 @@ public class PieceRendererTests
             foreach (var type in Types)
             {
                 using var bitmap = Draw(new Piece(color, type), cell, Background);
-                double ink = UiHarness.InkFraction(bitmap, Background);
-                string name = $"{(color == PieceColor.White ? "белая" : "чёрная")} {type}";
+                var ink = UiHarness.InkFraction(bitmap, Background);
+                var name = $"{(color == PieceColor.White ? "белая" : "чёрная")} {type}";
                 Assert.True(ink > 0.10, $"{name}: фигура видна (закрашено {ink:P0})");
                 Assert.True(ink < 0.85, $"{name}: фигура не заливает всю клетку");
             }

@@ -62,20 +62,17 @@ public sealed class AppSettings
     /// <summary>Переменная среды, которой тесты уводят настройки во временный файл.</summary>
     public const string PathOverrideVariable = "CHESS_TESTS_SETTINGS";
 
-    private static readonly string DefaultPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "ChessEmulator",
-        "settings.json");
-
-    [JsonIgnore]
     public static string SettingsPath
     {
         get
         {
             var overridden = Environment.GetEnvironmentVariable(PathOverrideVariable);
-            return string.IsNullOrWhiteSpace(overridden) ? DefaultPath : overridden;
+            return string.IsNullOrWhiteSpace(overridden) ? field : overridden;
         }
-    }
+    } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "ChessEmulator",
+        "settings.json");
 
     public static AppSettings Load()
     {
