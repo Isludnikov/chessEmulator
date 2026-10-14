@@ -146,6 +146,27 @@ public class PositionBuilderTests
         Assert.Equal(1, counters.FullmoveNumber);  // отрицательный номер хода поднят
     }
 
+    [Fact(DisplayName = "Строитель: позиции, которые не примет движок")]
+    public void EngineLimits()
+    {
+        Assert.Null(PositionBuilder.StartPosition().EngineWarning());  // начальная позиция — 32 фигуры
+
+        // ровно 8 пешек у каждой стороны и 32 фигуры — предел, который Stockfish ещё принимает
+        Assert.Null(PositionBuilder.FromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/QQQQKQQQ w kq - 0 1").EngineWarning());
+
+        var ninePawns = PositionBuilder.FromFen("4k3/8/8/8/8/P7/PPPPPPPP/4K3 w - - 0 1");
+        Assert.Empty(ninePawns.Validate());  // для игры позиция годится
+        Assert.Contains("у белых 9 пешек", ninePawns.EngineWarning());
+
+        Assert.Contains("у чёрных 9 пешек", PositionBuilder.FromFen("4k3/pppppppp/p7/8/8/8/8/4K3 w - - 0 1").EngineWarning());
+
+        // король и 35 пешек против полного комплекта
+        var crowd = PositionBuilder.FromFen("rnbqkbnr/pppppppp/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP/3PPP2/4K3 w kq - 0 1");
+        Assert.Empty(crowd.Validate());
+        Assert.Contains("на доске 52 фигур", crowd.EngineWarning());
+        Assert.True(crowd.ToPosition().LegalMoves.Count > 0, "ходить в такой позиции можно");
+    }
+
     [Fact(DisplayName = "Строитель: проверка позиции")]
     public void Validation()
     {

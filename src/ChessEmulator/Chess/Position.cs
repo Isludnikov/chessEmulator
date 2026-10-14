@@ -607,6 +607,29 @@ public sealed class Position
         return knights == 0 && bishopSquareColors.Count == 1;
     }
 
+    /// <summary>
+    /// Почему движок не примет позицию, или null, если примет. Stockfish отвергает FEN, где
+    /// больше 32 фигур или больше 8 пешек у одной стороны, и молча считает дальше от прежней
+    /// позиции — его ответы тогда к доске не относятся.
+    /// </summary>
+    public string? EngineLimitViolation()
+    {
+        int total = 0, whitePawns = 0, blackPawns = 0;
+        for (var i = 0; i < 64; i++)
+        {
+            var p = new Piece(_squares[i]);
+            if (p.IsEmpty) continue;
+            total++;
+            if (p.Is(PieceColor.White, PieceType.Pawn)) whitePawns++;
+            else if (p.Is(PieceColor.Black, PieceType.Pawn)) blackPawns++;
+        }
+
+        if (total > 32) return $"на доске {total} фигур, а Stockfish принимает не больше 32";
+        if (whitePawns > 8) return $"у белых {whitePawns} пешек, а Stockfish принимает не больше 8";
+        if (blackPawns > 8) return $"у чёрных {blackPawns} пешек, а Stockfish принимает не больше 8";
+        return null;
+    }
+
     /// <summary>Приблизительный материальный баланс в пешках (плюс — перевес белых).</summary>
     public int MaterialBalance()
     {

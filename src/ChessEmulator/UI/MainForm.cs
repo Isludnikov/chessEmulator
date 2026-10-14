@@ -94,6 +94,9 @@ public sealed class MainForm : Form
     private bool _restartingEngine;
     private DateTime _lastEngineRestartUtc = DateTime.MinValue;
 
+    private string? _engineLimitFen;
+    private string? _engineLimit;
+
     public MainForm(string? pgnPath = null)
     {
         _settings = AppSettings.Load();
@@ -1131,6 +1134,12 @@ public sealed class MainForm : Form
             return;
         }
 
+        if (EngineLimit != null)
+        {
+            _adviceBox.Text = EngineLimitText;
+            return;
+        }
+
         _adviceBox.Text = _settings.AutoAnalyze
             ? "Анализ…"
             : "Анализ выключен (пробел включает).";
@@ -1139,7 +1148,8 @@ public sealed class MainForm : Form
     /// <summary>Кнопки движка доступны, только когда он свободен.</summary>
     private void UpdateEngineControlsEnabled()
     {
-        var free = _engine.IsRunning && !_engineBusyWithMove && _gameAnalysisCts == null && !_editing;
+        var free = _engine.IsRunning && !_engineBusyWithMove && _gameAnalysisCts == null && !_editing
+                   && EngineLimit == null;
         _hintButton.Enabled = free;
         _playBestButton.Enabled = free;
     }
@@ -1571,6 +1581,12 @@ public sealed class MainForm : Form
             return;
         }
 
+        if (EngineLimit != null)
+        {
+            _searchStatus.Text = "Анализ недоступен: движок не принимает эту позицию.";
+            return;
+        }
+
         var position = _game.CurrentPosition;
         if (position.LegalMoves.Count == 0)
         {
@@ -1744,6 +1760,26 @@ public sealed class MainForm : Form
 
     private PlayMode CurrentMode => (PlayMode)Math.Max(0, _playModeBox.SelectedIndex);
 
+    /// <summary>
+    /// Почему движок не примет партию, или null. Движку уходит начальная позиция партии плюс
+    /// ходы, так что отказ от начальной позиции распространяется на всю партию.
+    /// </summary>
+    private string? EngineLimit
+    {
+        get
+        {
+            var fen = _game.StartFen;
+            if (fen != _engineLimitFen)
+            {
+                _engineLimitFen = fen;
+                _engineLimit = _game.Root.Position.EngineLimitViolation();
+            }
+            return _engineLimit;
+        }
+    }
+
+    private string EngineLimitText => $"Движок не работает с этой позицией: {EngineLimit}. Ходите за обе стороны.";
+
     private bool IsEngineTurn()
     {
         var side = _game.CurrentPosition.SideToMove;
@@ -1757,7 +1793,7 @@ public sealed class MainForm : Form
 
     /// <summary>Сейчас очередь движка ходить, и он может это сделать.</summary>
     private bool EngineShouldMove() =>
-        !_editing && IsEngineTurn() && _engine.IsRunning && _gameAnalysisCts == null
+        !_editing && IsEngineTurn() && _engine.IsRunning && _gameAnalysisCts == null && EngineLimit == null
         && _game.CurrentPosition.LegalMoves.Count > 0;
 
     private async Task MaybeLetEngineMoveAsync()
@@ -1782,6 +1818,11 @@ public sealed class MainForm : Form
         }
         if (_engineBusyWithMove || _gameAnalysisCts != null) return;
         if (_game.CurrentPosition.LegalMoves.Count == 0) return;
+        if (EngineLimit != null)
+        {
+            _searchStatus.Text = "Ход движка недоступен: движок не принимает эту позицию.";
+            return;
+        }
 
         // Всё, о чём спрашиваем движок, фиксируем до первого await: пока он думает, партию могут
         // пролистать или заменить, а сам движок — перезапустить.
@@ -1936,6 +1977,13 @@ public sealed class MainForm : Form
         if (_gameAnalysisCts != null)
         {
             _gameAnalysisCts.Cancel();
+            return;
+        }
+
+        if (EngineLimit != null)
+        {
+            MessageBox.Show(this, EngineLimitText, "Разбор партии",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 

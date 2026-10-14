@@ -208,4 +208,10 @@ public sealed class PositionBuilder
 
         return errors;
     }
+
+    /// <summary>
+    /// Почему с позицией не сможет работать движок, или null. Это не ошибка: такую позицию
+    /// можно поставить и играть за обе стороны вручную.
+    /// </summary>
+    public string? EngineWarning() => ToPosition().EngineLimitViolation();
 }

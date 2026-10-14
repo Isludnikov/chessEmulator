@@ -170,6 +170,31 @@ public class MainFormGameTests
         });
     }
 
+    [WinFormsFact(DisplayName = "Главное окно: партию, которую не примет движок, играют вручную")]
+    public void ПозицияБезДвижка()
+    {
+        WithSettingsFile(() =>
+        {
+            const string fen = "rnbqkbnr/pppppppp/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP/3PPP2/4K3 w kq - 0 1";
+
+            using var form = new MainForm();
+            Assert.Null(Call(form, "get_EngineLimit"));  // обычную партию движок принимает
+
+            var editor = Field<PositionEditorPanel>(form, "_editorPanel");
+            EnterEditor(form);
+            Assert.Null(editor.SetFen(fen));
+            UiHarness.Press(UiHarness.FindButton(editor, "Применить"));
+
+            Assert.Equal(fen, GameOf(form).StartFen);  // партия начата с этой позиции
+            Assert.Contains("52 фигур", (string?)Call(form, "get_EngineLimit"));  // и движку она не по силам
+            Assert.False(Field<Button>(form, "_hintButton").Enabled, "подсказка недоступна");
+            Assert.False(Field<Button>(form, "_playBestButton").Enabled, "лучший ход недоступен");
+
+            var game = Play(form, "e1d1", "b8a6");
+            Assert.Equal("Nxa6", game.Current.San);  // за обе стороны ходят вручную
+        });
+    }
+
     [WinFormsFact(DisplayName = "Главное окно: кнопки под записью партии")]
     public void КнопкиНавигации()
     {

@@ -171,6 +171,25 @@ public class PositionEditorPanelTests
         Assert.True(UiHarness.FindButton(mate, "Применить").Enabled, "мат можно применить");
     }
 
+    [WinFormsFact(DisplayName = "Редактор: позицию, которую не примет движок, можно применить с предупреждением")]
+    public void EngineLimitWarning()
+    {
+        const string fen = "rnbqkbnr/pppppppp/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP/3PPP2/4K3 w kq - 0 1";
+        using var panel = NewPanel(fen);
+        string? applied = null;
+        panel.Applied += (_, e) => applied = e.Fen;
+
+        var apply = UiHarness.FindButton(panel, "Применить");
+        Assert.True(apply.Enabled, "лишние пешки не мешают применить позицию");
+
+        var status = UiHarness.All(panel).OfType<Label>()
+            .FirstOrDefault(l => l.Text.Contains("движок её не примет", StringComparison.Ordinal));
+        Assert.True(status != null, "предупреждение показано на панели");
+
+        apply.PerformClick();
+        Assert.Equal(fen, applied);
+    }
+
     [WinFormsFact(DisplayName = "Редактор: палитра фигур")]
     public void Palette()
     {

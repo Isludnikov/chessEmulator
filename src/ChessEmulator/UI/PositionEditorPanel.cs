@@ -364,7 +364,14 @@ public sealed class PositionEditorPanel : UserControl
 
         var errors = Builder.Validate();
         _apply.Enabled = errors.Count == 0;
-        if (errors.Count == 0)
+        var engineWarning = errors.Count == 0 ? Builder.EngineWarning() : null;
+        if (engineWarning != null)
+        {
+            _status.ForeColor = Color.FromArgb(230, 200, 110);
+            _status.Text = "Позицию можно применить, но движок её не примет: " + engineWarning +
+                           ". Анализ и игра против движка будут недоступны — ходите за обе стороны.";
+        }
+        else if (errors.Count == 0)
         {
             _status.ForeColor = Color.FromArgb(150, 210, 150);
             _status.Text = "Позиция корректна — можно применить.";
